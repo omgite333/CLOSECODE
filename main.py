@@ -1,0 +1,214 @@
+"""
+main.py
+
+Entry point. Run with:
+    python main.py              start a new session
+    python main.py --continue   resume the most recent saved session
+
+Uses LangGraph's astream_events (v2) so we get BOTH token-level text
+streaming (for the live "typewriter" response panel) AND tool-call
+start/end events (for the trace lines) out of the same loop.
+
+Modes (see modes.py):
+    /plan   — only read-only tools are bound to the model, and the system
+              prompt gets a live note telling it so.
+    /build  — all tools available (default).
+
+Model switching: /model <id> rebuilds the graph with a different model for
+the rest of the session (requires get_llm() in llm.py to accept an optional
+override argument).
+"""
+
+import asyncio
+import os
+import sys
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from langchain_core.messages import HumanMessage, SystemMessage  # noqa: E402
+
+import session  # noqa: E402
+import ui  # noqa: E402
+from agent import SYSTEM_PROMPT, build_graph  # noqa: E402
+from harness import Harness  # noqa: E402
+from llm import DEFAULT_MODEL  # noqa: E402
+from mcp_tools import get_git_repo_path, get_git_tools  # noqa: E402
+from modes import filter_tools_for_mode, mode_system_note  # noqa: E402
+from token_tracker import TokenTracker  # noqa: E402
+from tools import LOCAL_TOOLS, bind_harness  # noqa: E402
+
+
+def system_message_for(mode: str) -> SystemMessage:
+    return SystemMessage(content=SYSTEM_PROMPT + mode_system_note(mode))
+
+
+async def run_turn(graph, messages: list, token_tracker: TokenTracker) -> list:
+    """Streams one user turn via astream_events. Prints tool calls/results
+    as they happen, streams the final text response token-by-token into a
+    live-updating panel, and tracks token usage along the way."""
+    status = ui.start_spinner()
+    status.start()
+    spinner_on = True
+
+    def stop_spinner():
+        nonlocal spinner_on
+        if spinner_on:
+            status.stop()
+            spinner_on = False
+
+    def resume_spinner():
+        nonlocal spinner_on
+        if not spinner_on:
+            status.start()
+            spinner_on = True
+
+    live = None
+    text_buffer = ""
+    final_messages = messages
+
+    try:
+        async for event in graph.astream_events({"messages": messages}, version="v2"):
+            kind = event["event"]
+
+            if kind == "on_chat_model_stream":
+                chunk = event["data"]["chunk"]
+                if getattr(chunk, "content", None):
+                    stop_spinner()
+                    if live is None:
+                        live = ui.stream_start()
+                    text_buffer += chunk.content
+                    ui.stream_update(live, text_buffer)
+
+            elif kind == "on_chat_model_end":
+                output = event["data"].get("output")
+                if output is not None:
+                    token_tracker.add_from_message(output)
+                if live is not None:
+                    ui.stream_stop(live)
+                    live = None
+                    text_buffer = ""
+                resume_spinner()
+
+            elif kind == "on_tool_start":
+                stop_spinner()
+                ui.print_tool_call(event["name"], event["data"].get("input") or {})
+
+            elif kind == "on_tool_end":
+                output = event["data"].get("output")
+                content = getattr(output, "content", None)
+                if content is None:
+                    content = str(output)
+                ui.print_tool_result(str(content))
+                resume_spinner()
+
+            elif kind == "on_chain_end" and event.get("name") == "LangGraph":
+                output = event["data"].get("output")
+                if output and "messages" in output:
+                    final_messages = output["messages"]
+
+    except Exception as e:
+        stop_spinner()
+        ui.print_notice(f"Error during this turn: {e}", style="bold red")
+        return messages
+    finally:
+        stop_spinner()
+        if live is not None:
+            ui.stream_stop(live)
+
+    return final_messages
+
+
+async def main():
+    workdir = os.environ.get("AGENT_WORKDIR", "./sandbox")
+    auto_approve = os.environ.get("AGENT_AUTO_APPROVE", "false").lower() == "true"
+    use_git = os.environ.get("AGENT_ENABLE_GIT", "false").lower() == "true"
+
+    harness = Harness(workdir=workdir, auto_approve=auto_approve, confirm_fn=ui.confirm)
+    bind_harness(harness)
+
+    all_tools = list(LOCAL_TOOLS)
+    if use_git:
+        repo_path = get_git_repo_path()
+        try:
+            git_tools = await get_git_tools(repo_path)
+            all_tools.extend(git_tools)
+        except Exception as e:
+            ui.print_notice(f"Could not load git MCP tools, continuing without them: {e}", style="yellow")
+
+    mode = "build"
+    model_override = None
+    token_tracker = TokenTracker()
+
+    graph = build_graph(filter_tools_for_mode(all_tools, mode), model_override)
+
+    resume = "--continue" in sys.argv
+    if resume:
+        session_path = session.latest_session_path()
+        loaded = session.load(session_path) if session_path else None
+        if loaded:
+            messages = loaded
+            ui.print_notice(f"Resumed session {session_path.name} ({len(messages)} messages)", style="cyan")
+        else:
+            session_path = session.new_session_path()
+            messages = [system_message_for(mode)]
+    else:
+        session_path = session.new_session_path()
+        messages = [system_message_for(mode)]
+
+    model_name = model_override or os.environ.get("HF_MODEL_ID") or os.environ.get("OPENROUTER_MODEL", DEFAULT_MODEL)
+    ui.print_banner(model_name, str(harness.workdir), [t.name for t in all_tools])
+
+    while True:
+        try:
+            raw = ui.user_prompt(mode)
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+
+        if not raw:
+            continue
+        if raw.lower() in {"exit", "quit"}:
+            break
+
+        if raw.startswith("/"):
+            parts = raw[1:].strip().split(maxsplit=1)
+            cmd = parts[0].lower() if parts else ""
+            arg = parts[1] if len(parts) > 1 else ""
+
+            if cmd == "plan":
+                mode = "plan"
+                graph = build_graph(filter_tools_for_mode(all_tools, mode), model_override)
+                messages[0] = system_message_for(mode)
+                ui.print_notice("Switched to PLAN mode \u2014 read-only tools only.", style="magenta")
+            elif cmd == "build":
+                mode = "build"
+                graph = build_graph(filter_tools_for_mode(all_tools, mode), model_override)
+                messages[0] = system_message_for(mode)
+                ui.print_notice("Switched to BUILD mode \u2014 all tools enabled.", style="blue")
+            elif cmd == "model":
+                if arg:
+                    model_override = arg
+                    graph = build_graph(filter_tools_for_mode(all_tools, mode), model_override)
+                    ui.print_notice(f"Switched model to {arg}", style="cyan")
+                else:
+                    ui.print_notice("Usage: /model <model-id>", style="yellow")
+            elif cmd == "usage":
+                ui.print_token_usage(token_tracker.summary())
+            elif cmd == "clear":
+                messages = [system_message_for(mode)]
+                ui.print_notice("History cleared.")
+            elif cmd == "help":
+                ui.print_help()
+            else:
+                ui.print_notice(f"Unknown command: /{cmd}  (try /help)", style="yellow")
+            continue
+
+        messages.append(HumanMessage(content=raw))
+        messages = await run_turn(graph, messages, token_tracker)
+        session.save(session_path, messages)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

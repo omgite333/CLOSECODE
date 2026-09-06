@@ -1,0 +1,87 @@
+"""
+agent.py
+
+The agent loop itself, built as a LangGraph StateGraph:
+
+    agent (calls the LLM)
+      |
+      v
+  [has tool calls?] --no--> END
+      |
+     yes
+      |
+      v
+    tools (executes them via ToolNode)
+      |
+      v
+    agent  (loop back with tool results)
+
+This is the same shape as Terminus 2 (Terminal-Bench's reference agent) and
+OpenCode's core loop: read -> decide -> act -> observe -> repeat. LangGraph
+just gives you checkpointing, streaming, and LangSmith tracing for free
+around that loop.
+
+LangSmith tracing needs no code here at all — set LANGCHAIN_TRACING_V2=true,
+LANGCHAIN_API_KEY, and LANGCHAIN_PROJECT as environment variables (see
+.env.example) and every graph run is automatically traced.
+"""
+
+from typing import Annotated, TypedDict
+
+from langgraph.graph import StateGraph
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode, tools_condition
+
+from llm import get_llm
+
+SYSTEM_PROMPT = """You are a terminal coding agent running in a sandboxed working directory.
+You have tools for reading, writing, and editing files, running shell commands and tests,
+listing directories, and interacting with git (status, diff, log, commit, branches).
+
+Note: your available tools change depending on the current mode. In "plan" mode only
+read-only tools are bound to you (you literally cannot call write/edit/bash/commit tools
+even if you wanted to) — use that mode to explore and propose an approach without any
+risk of side effects. In "build" mode all tools are available.
+
+Rules:
+- Inspect before you change: look at relevant files or run a command to understand
+  the current state before editing anything.
+- Prefer edit_file over write_file for small changes — it's cheaper and safer than
+  rewriting a whole file.
+- Call one tool at a time and read its result before deciding the next step.
+- Verify your work: after making a change, run a command, run tests, or read the
+  file back to confirm it did what you intended.
+- Use git tools deliberately: check status/diff before committing, and never force-push
+  or hard-reset unless the user explicitly asked for that specific action.
+- When the task is complete, reply with plain text summarizing what you did.
+  Do not call a tool in the same turn as your final summary.
+"""
+
+
+class AgentState(TypedDict):
+    messages: Annotated[list, add_messages]
+
+
+def build_graph(tools: list, model_override: str = None):
+    """tools: the combined list of local tools (bash, read_file, etc.) and
+    any MCP-provided tools (e.g. git) — assembled by main.py before this
+    is called, since loading MCP tools is async.
+
+    model_override: pass a model ID to use instead of whatever llm.py
+    defaults to. Requires get_llm() in your llm.py to accept an optional
+    override argument — see the note in main.py's /model command if it
+    doesn't yet."""
+    
+    llm_with_tools = get_llm(model_override).bind_tools(tools)
+
+    def call_model(state: AgentState):
+        response = llm_with_tools.invoke(state["messages"])
+        return {"messages": [response]}
+
+    graph = StateGraph(AgentState)
+    graph.add_node("agent", call_model)
+    graph.add_node("tools", ToolNode(tools))
+    graph.set_entry_point("agent")
+    graph.add_conditional_edges("agent", tools_condition)
+    graph.add_edge("tools", "agent")
+    return graph.compile()
