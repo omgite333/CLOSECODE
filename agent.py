@@ -71,7 +71,6 @@ def build_graph(tools: list, model_override: str = None):
     defaults to. Requires get_llm() in your llm.py to accept an optional
     override argument — see the note in main.py's /model command if it
     doesn't yet."""
-    
     llm_with_tools = get_llm(model_override).bind_tools(tools)
 
     def call_model(state: AgentState):

@@ -13,6 +13,8 @@ limits) belongs in a proper sandbox like Docker/Modal if you take this further â
 see the earlier discussion on Terminal-Bench's Docker-per-task approach.
 """
 
+import os
+import signal
 import subprocess
 from pathlib import Path
 from typing import Callable, Optional
@@ -52,20 +54,31 @@ class Harness:
     def run_bash(self, command: str, timeout: int = 30) -> str:
         if not self.confirm(f"run: `{command}`"):
             return "Permission denied by user."
+        proc = subprocess.Popen(
+            command,
+            shell=True,
+            cwd=self.workdir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+        )
         try:
-            result = subprocess.run(
-                command,
-                shell=True,
-                cwd=self.workdir,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-            output = (result.stdout or "") + (result.stderr or "")
-            output = output.strip() or "(no output)"
+            output, _ = proc.communicate(timeout=timeout)
+            output = (output or "").strip() or "(no output)"
             return output[-4000:]
         except subprocess.TimeoutExpired:
-            return f"Command timed out after {timeout}s."
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.communicate()
+            return (
+                f"Command timed out after {timeout}s and was terminated (including any "
+                f"child processes it started). If this was meant to be a long-running "
+                f"process (a server, a watcher), run it in the background instead â€” see "
+                f"the system prompt for how."
+            )
 
     def read_file(self, path: str) -> str:
         try:
