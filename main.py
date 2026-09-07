@@ -22,6 +22,7 @@ override argument).
 import asyncio
 import os
 import sys
+import time
 
 from dotenv import load_dotenv
 
@@ -44,29 +45,25 @@ def system_message_for(mode: str) -> SystemMessage:
     return SystemMessage(content=SYSTEM_PROMPT + mode_system_note(mode))
 
 
+def _looks_like_tool_json(text: str) -> bool:
+    """True when a streamed buffer is a tool call the model is writing out as
+    JSON (qwen2.5-coder via Ollama does this instead of native tool_calls).
+    Such content is re-parsed into a real tool call in agent.py, so we keep
+    it out of the chat panel entirely."""
+    stripped = text.lstrip()
+    return stripped.startswith("{") and '"name"' in stripped and '"arguments"' in stripped
+
+
 async def run_turn(graph, messages: list, token_tracker: TokenTracker) -> list:
     """Streams one user turn via astream_events. Prints tool calls/results
     as they happen, streams the final text response token-by-token into a
     live-updating panel, and tracks token usage along the way."""
-    status = ui.start_spinner()
-    status.start()
-    spinner_on = True
-
-    def stop_spinner():
-        nonlocal spinner_on
-        if spinner_on:
-            status.stop()
-            spinner_on = False
-
-    def resume_spinner():
-        nonlocal spinner_on
-        if not spinner_on:
-            status.start()
-            spinner_on = True
+    ui.print_thinking()
 
     live = None
     text_buffer = ""
     final_messages = messages
+    turn_start = time.monotonic()
 
     try:
         async for event in graph.astream_events({"messages": messages}, version="v2"):
@@ -75,10 +72,11 @@ async def run_turn(graph, messages: list, token_tracker: TokenTracker) -> list:
             if kind == "on_chat_model_stream":
                 chunk = event["data"]["chunk"]
                 if getattr(chunk, "content", None):
-                    stop_spinner()
+                    text_buffer += chunk.content
+                    if _looks_like_tool_json(text_buffer):
+                        continue
                     if live is None:
                         live = ui.stream_start()
-                    text_buffer += chunk.content
                     ui.stream_update(live, text_buffer)
 
             elif kind == "on_chat_model_end":
@@ -88,11 +86,9 @@ async def run_turn(graph, messages: list, token_tracker: TokenTracker) -> list:
                 if live is not None:
                     ui.stream_stop(live)
                     live = None
-                    text_buffer = ""
-                resume_spinner()
+                text_buffer = ""
 
             elif kind == "on_tool_start":
-                stop_spinner()
                 ui.print_tool_call(event["name"], event["data"].get("input") or {})
 
             elif kind == "on_tool_end":
@@ -101,7 +97,6 @@ async def run_turn(graph, messages: list, token_tracker: TokenTracker) -> list:
                 if content is None:
                     content = str(output)
                 ui.print_tool_result(str(content))
-                resume_spinner()
 
             elif kind == "on_chain_end" and event.get("name") == "LangGraph":
                 output = event["data"].get("output")
@@ -109,14 +104,19 @@ async def run_turn(graph, messages: list, token_tracker: TokenTracker) -> list:
                     final_messages = output["messages"]
 
     except Exception as e:
-        stop_spinner()
-        ui.print_notice(f"Error during this turn: {e}", style="bold red")
+        detail = str(e) or repr(e)
+        cause = getattr(e, "__cause__", None)
+        if cause and str(cause) not in detail:
+            detail = f"{detail} (caused by: {cause})"
+        ui.print_notice(
+            f"Error during this turn [{type(e).__name__}]: {detail}", style="bold red"
+        )
         return messages
     finally:
-        stop_spinner()
         if live is not None:
             ui.stream_stop(live)
 
+    ui.print_turn_complete(time.monotonic() - turn_start)
     return final_messages
 
 
@@ -157,7 +157,8 @@ async def main():
         session_path = session.new_session_path()
         messages = [system_message_for(mode)]
 
-    model_name = model_override or os.environ.get("HF_MODEL_ID") or os.environ.get("OPENROUTER_MODEL", DEFAULT_MODEL)
+    model_name = model_override or os.environ.get("HF_MODEL_ID") or os.environ.get("OLLAMA_MODEL", DEFAULT_MODEL)
+    ui.set_context(mode, model_name)
     ui.print_banner(model_name, str(harness.workdir), [t.name for t in all_tools])
 
     while True:
@@ -181,16 +182,20 @@ async def main():
                 mode = "plan"
                 graph = build_graph(filter_tools_for_mode(all_tools, mode), model_override)
                 messages[0] = system_message_for(mode)
+                ui.set_context(mode, model_name)
                 ui.print_notice("Switched to PLAN mode \u2014 read-only tools only.", style="magenta")
             elif cmd == "build":
                 mode = "build"
                 graph = build_graph(filter_tools_for_mode(all_tools, mode), model_override)
                 messages[0] = system_message_for(mode)
+                ui.set_context(mode, model_name)
                 ui.print_notice("Switched to BUILD mode \u2014 all tools enabled.", style="blue")
             elif cmd == "model":
                 if arg:
                     model_override = arg
+                    model_name = arg
                     graph = build_graph(filter_tools_for_mode(all_tools, mode), model_override)
+                    ui.set_context(mode, model_name)
                     ui.print_notice(f"Switched model to {arg}", style="cyan")
                 else:
                     ui.print_notice("Usage: /model <model-id>", style="yellow")
@@ -206,6 +211,7 @@ async def main():
             continue
 
         messages.append(HumanMessage(content=raw))
+        ui.print_user_message(raw)
         messages = await run_turn(graph, messages, token_tracker)
         session.save(session_path, messages)
 
