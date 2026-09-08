@@ -1,13 +1,3 @@
-"""
-session.py
-
-Saves conversation history to disk after every turn, using LangChain's own
-messages_to_dict / messages_from_dict so message types (System/Human/AI/Tool)
-round-trip correctly — hand-rolling this with raw json.dumps would lose the
-type information and break tool_calls on reload.
-
-Layout: ./sessions/session_<unix-timestamp-when-started>.json
-"""
 
 import json
 import time

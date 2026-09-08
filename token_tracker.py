@@ -1,12 +1,3 @@
-"""
-token_tracker.py
-
-Accumulates token usage across a session. Different providers report usage
-differently (LangChain's standardized `usage_metadata` on newer chunks vs.
-older `response_metadata['token_usage']` dicts vs. nothing at all for some
-free-tier endpoints) — this tries each in order and degrades gracefully
-rather than crashing when a provider reports none of them.
-"""
 
 from dataclasses import dataclass
 

@@ -1,20 +1,3 @@
-"""
-ui.py
-
-OpenCode-style chat terminal UI.
-
-Restyles the line-based streaming client to look like the opencode TUI:
-a conversation thread where user and assistant messages appear inline
-with labels, tool steps are marked with -> (read) / <- (write) arrows,
-each finished turn closes with a completion marker, and input sits in a
-divider-framed bar at the bottom. Colors are taken from the opencode
-default theme (dark variant).
-
-Like opencode, everything is left-aligned — only the boot header is
-centered. There is no full-screen rendering here: output flows
-line-by-line so the tool stream and the typewriter response stay
-compatible with the astream_events loop in main.py.
-"""
 
 from rich.console import Console, Group
 from rich.live import Live

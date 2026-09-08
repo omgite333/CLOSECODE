@@ -1,17 +1,3 @@
-"""
-harness.py
-
-The safety layer between the agent's tool calls and your actual filesystem/shell.
-Two jobs:
-  1. Sandbox: every file path is resolved relative to a working directory and
-     rejected if it tries to escape it (e.g. via "../../etc/passwd").
-  2. Permission: risky actions (running a shell command, writing a file) require
-     interactive confirmation unless auto-approve is explicitly turned on.
-
-This is intentionally simple. Real hardening (seccomp, containers, resource
-limits) belongs in a proper sandbox like Docker/Modal if you take this further —
-see the earlier discussion on Terminal-Bench's Docker-per-task approach.
-"""
 
 import os
 import signal
@@ -50,7 +36,26 @@ class Harness:
         return result == "allow"
 
     def resolve_path(self, relative_path: str) -> Path:
-        target = (self.workdir / relative_path).resolve()
+        # Normalize before joining. Models very commonly pass absolute-looking
+        # paths (e.g. "/my_project/main.py" — they're thinking "project root",
+        # not "host filesystem root"). That's a real problem with pathlib:
+        # Path("/sandbox") / "/my_project/main.py" DISCARDS the left side
+        # entirely (joining an absolute path onto another replaces it), so
+        # the join silently points outside the sandbox instead of into it.
+        # This is exactly what caused write_file to appear to create files
+        # while bash (which correctly uses the same self.workdir) saw an
+        # empty directory — write_file's target had quietly become
+        # `/my_project/main.py` on the host, not `<workdir>/my_project/main.py`.
+        #
+        # Fix: strip any leading slash/backslash and any Windows drive
+        # prefix before joining, so every path is treated as relative to
+        # the sandbox no matter how the model phrased it. bash and every
+        # file tool then agree on the exact same root in every case.
+        cleaned = relative_path.replace("\\", "/").lstrip("/")
+        if len(cleaned) > 1 and cleaned[1] == ":":  # e.g. "C:/foo" or "C:foo"
+            cleaned = cleaned[2:].lstrip("/")
+
+        target = (self.workdir / cleaned).resolve()
         if self.workdir != target and self.workdir not in target.parents:
             raise PermissionDenied(f"Path '{relative_path}' escapes the sandboxed working directory.")
         return target

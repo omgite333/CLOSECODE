@@ -1,11 +1,3 @@
-"""
-tools.py
-
-The agent's tool belt. Each tool is a thin wrapper that delegates the actual
-work to the Harness (harness.py), which enforces sandboxing and permission
-checks. Keep tools minimal at first — bash, read_file, write_file is enough
-to build something that can inspect and edit code end to end.
-"""
 
 from typing import Optional
 

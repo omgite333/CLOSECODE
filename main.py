@@ -1,23 +1,3 @@
-"""
-main.py
-
-Entry point. Run with:
-    python main.py              start a new session
-    python main.py --continue   resume the most recent saved session
-
-Uses LangGraph's astream_events (v2) so we get BOTH token-level text
-streaming (for the live "typewriter" response panel) AND tool-call
-start/end events (for the trace lines) out of the same loop.
-
-Modes (see modes.py):
-    /plan   — only read-only tools are bound to the model, and the system
-              prompt gets a live note telling it so.
-    /build  — all tools available (default).
-
-Model switching: /model <id> rebuilds the graph with a different model for
-the rest of the session (requires get_llm() in llm.py to accept an optional
-override argument).
-"""
 
 import asyncio
 import os
@@ -29,6 +9,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from langchain_core.messages import HumanMessage, SystemMessage  # noqa: E402
+
+from langgraph.errors import GraphRecursionError  # noqa: E402
 
 import session  # noqa: E402
 import ui  # noqa: E402
@@ -103,6 +85,23 @@ async def run_turn(graph, messages: list, token_tracker: TokenTracker) -> list:
                 if output and "messages" in output:
                     final_messages = output["messages"]
 
+    except GraphRecursionError:
+        # This used to be the visible symptom of the sandbox/workdir bug:
+        # write_file silently failing on an absolute-looking path, bash
+        # correctly showing an empty dir, and the model retrying the same
+        # broken step until the recursion cap kicked in. That root cause is
+        # fixed in harness.py now. If this still fires, it means the agent
+        # is genuinely stuck in a loop for some other reason (e.g. a
+        # command that keeps failing for a real, external reason) — surface
+        # that plainly instead of a raw traceback, rather than papering
+        # over it by just raising the limit.
+        ui.print_notice(
+            "Stopped: the agent hit the step limit for this turn without finishing "
+            "(likely repeating a failing action). Check the tool calls/results above "
+            "for what kept failing, then try again or rephrase the task.",
+            style="bold red",
+        )
+        return messages
     except Exception as e:
         detail = str(e) or repr(e)
         cause = getattr(e, "__cause__", None)

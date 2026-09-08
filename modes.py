@@ -1,19 +1,3 @@
-"""
-modes.py
-
-Two modes, toggled at runtime via /plan and /build:
-
-- build (default): full tool access — read, write, edit, run commands, git.
-- plan: read/explore-only. Mutating tools are removed from what the model
-  can even see (not just told not to use), so a plan-mode "mistake" can't
-  actually touch the filesystem or git state. The model is told to respond
-  with a concrete plan instead of pretending to have made changes.
-
-Filtering by name/keyword is a heuristic, not a formal guarantee — good
-enough for local tools (exact names) and MCP git tools (keyword match on
-mutating verbs), but if you add a new tool later, check it's classified
-correctly here rather than assuming.
-"""
 
 PLAN_MODE_BLOCKED_EXACT = {"bash", "write_file", "edit_file"}
 PLAN_MODE_BLOCKED_KEYWORDS = [

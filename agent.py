@@ -1,30 +1,3 @@
-"""
-agent.py
-
-The agent loop itself, built as a LangGraph StateGraph:
-
-    agent (calls the LLM)
-      |
-      v
-  [has tool calls?] --no--> END
-      |
-     yes
-      |
-      v
-    tools (executes them via ToolNode)
-      |
-      v
-    agent  (loop back with tool results)
-
-This is the same shape as Terminus 2 (Terminal-Bench's reference agent) and
-OpenCode's core loop: read -> decide -> act -> observe -> repeat. LangGraph
-just gives you checkpointing, streaming, and LangSmith tracing for free
-around that loop.
-
-LangSmith tracing needs no code here at all — set LANGCHAIN_TRACING_V2=true,
-LANGCHAIN_API_KEY, and LANGCHAIN_PROJECT as environment variables (see
-.env.example) and every graph run is automatically traced.
-"""
 
 from typing import Annotated, TypedDict
 

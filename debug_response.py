@@ -1,12 +1,4 @@
-"""
-Standalone diagnostic: bypasses the graph entirely and prints the RAW
-response object from the model, so we can see exactly what came back
-(content, tool_calls, reasoning_content, everything) instead of just
-the one field main.py happens to print.
 
-Run this from inside your terminal_agent project directory:
-    python debug_response.py
-"""
 import os
 from dotenv import load_dotenv
 load_dotenv()
