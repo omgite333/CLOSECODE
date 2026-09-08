@@ -29,7 +29,7 @@ class Harness:
         self,
         workdir: str,
         auto_approve: bool = False,
-        confirm_fn: Optional[Callable[[str], bool]] = None,
+        confirm_fn: Optional[Callable[[str], str]] = None,
     ):
         self.workdir = Path(workdir).resolve()
         self.workdir.mkdir(parents=True, exist_ok=True)
@@ -37,13 +37,17 @@ class Harness:
         # Defaults to plain input() if no styled confirm function is given —
         # keeps Harness usable standalone without depending on ui.py.
         self._confirm_fn = confirm_fn or (
-            lambda action: input(f"\n[permission] Allow agent to {action}? [y/N] ").strip().lower() == "y"
+            lambda action: "allow" if input(f"\n[permission] Allow agent to {action}? [y/N] ").strip().lower() in ("y", "yes") else "deny"
         )
 
     def confirm(self, action_description: str) -> bool:
         if self.auto_approve:
             return True
-        return self._confirm_fn(action_description)
+        result = self._confirm_fn(action_description)
+        if result == "always":
+            self.auto_approve = True
+            return True
+        return result == "allow"
 
     def resolve_path(self, relative_path: str) -> Path:
         target = (self.workdir / relative_path).resolve()

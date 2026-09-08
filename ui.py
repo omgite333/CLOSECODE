@@ -198,16 +198,26 @@ def print_help() -> None:
     )
 
 
-def confirm(question: str) -> bool:
-    """Permission prompt styled like an opencode permission dialog."""
+def confirm(question: str) -> str:
+    """Permission prompt styled like an opencode permission dialog.
+    Returns "allow", "always", or "deny"."""
     console.print()
     body = Text()
     body.append("\u25b3 ", style=f"bold {WARNING}")
     body.append(f"Allow agent to {question}?", style=TEXT)
     console.print(Panel(body, title="permission", title_align="left",
                         border_style=BORDER_SUBTLE, padding=(0, 1)))
-    answer = console.input("[y/N] ").strip().lower()
-    return answer in ("y", "yes")
+    opts = Text()
+    opts.append("1", style=f"bold {SUCCESS}"); opts.append(") Allow    ")
+    opts.append("2", style=f"bold {WARNING}"); opts.append(") Always Allow    ")
+    opts.append("3", style=f"bold {ERROR}");   opts.append(") Don't Allow")
+    console.print(opts)
+    answer = console.input("[1/2/3] ").strip()
+    if answer == "1":
+        return "allow"
+    if answer == "2":
+        return "always"
+    return "deny"
 
 
 def user_prompt(mode: str) -> str:
