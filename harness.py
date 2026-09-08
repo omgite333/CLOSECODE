@@ -5,6 +5,8 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Optional
 
+from guardrails import check_bash_command, check_write_content
+
 
 class PermissionDenied(Exception):
     pass
@@ -61,6 +63,14 @@ class Harness:
         return target
 
     def run_bash(self, command: str, timeout: int = 30) -> str:
+        reason = check_bash_command(command)
+        if reason:
+            return (
+                f"Guardrail blocked this command: {reason}. It looks destructive or "
+                "malicious, so it cannot run \u2014 even if approval were granted. "
+                "Rephrase the command to do the same thing safely, or use a "
+                "different approach."
+            )
         if not self.confirm(f"run: `{command}`"):
             return "Permission denied by user."
         proc = subprocess.Popen(
@@ -101,6 +111,13 @@ class Harness:
         return target.read_text(errors="replace")[:8000]
 
     def write_file(self, path: str, content: str) -> str:
+        reason = check_write_content(content)
+        if reason:
+            return (
+                f"Guardrail refused to write this content: {reason} (malicious-code "
+                "indicator). Policy forbids creating malware or exploit code "
+                "\u2014 even inside the sandbox."
+            )
         try:
             target = self.resolve_path(path)
         except PermissionDenied as e:
@@ -132,6 +149,12 @@ class Harness:
         a whole file via write_file, and safer since it fails loudly if the
         anchor text isn't found or isn't unique, instead of silently
         clobbering unrelated content."""
+        reason = check_write_content(new_text)
+        if reason:
+            return (
+                f"Guardrail refused this edit: {reason} (malicious-code "
+                "indicator). Policy forbids creating malware or exploit code."
+            )
         try:
             target = self.resolve_path(path)
         except PermissionDenied as e:
@@ -155,6 +178,9 @@ class Harness:
         Separate from run_bash mainly so the model has a clearly-named,
         single-purpose action for 'verify my work' rather than free-form
         shell access every time."""
+        reason = check_bash_command(command)
+        if reason:
+            return f"Guardrail blocked this test command: {reason}. It looks destructive or malicious and cannot run."
         if not self.confirm(f"run tests with: `{command}`"):
             return "Permission denied by user."
         try:

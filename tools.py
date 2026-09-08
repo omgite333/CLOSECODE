@@ -1,6 +1,8 @@
 
+import os
 from typing import Optional
 
+import requests
 from langchain_core.tools import tool
 
 from harness import Harness
@@ -60,16 +62,49 @@ def run_tests(command: str = "pytest") -> str:
     return _require_harness().run_tests(command)
 
 
+_TAVILY_API_URL = "https://api.tavily.com/search"
+
+
+@tool
+def tavily_search(query: str, max_results: int = 5) -> str:
+    """Search the web using Tavily and return the top results (title, url, content snippet, relevance score). Handy for checking current API docs, finding library versions, resolving error messages, or verifying facts that changed after your training cutoff. Requires a TAVILY_API_KEY in .env."""
+    api_key = os.environ.get("TAVILY_API_KEY")
+    if not api_key:
+        return "Error: TAVILY_API_KEY is not set. Add it to the .env file and restart."
+    safe_max = max(1, min(int(max_results), 10))
+    try:
+        resp = requests.post(
+            _TAVILY_API_URL,
+            json={"api_key": api_key, "query": query, "max_results": safe_max, "search_depth": "basic"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        return f"Tavily search failed: {e}"
+
+    results = data.get("results") or []
+    if not results:
+        return f"No results found for: {query}"
+    lines = [f"Query: {query}\n"]
+    for i, r in enumerate(results, 1):
+        title = r.get("title", "")
+        url = r.get("url", "")
+        content = (r.get("content") or "").strip()
+        lines.append(f"{i}. {title}\n   URL: {url}\n   {content}")
+    return "\n".join(lines)
+
+
 # Local (non-MCP) tools. main.py combines this with any MCP-provided tools
 # (e.g. git) before binding to the model.
-LOCAL_TOOLS = [bash, read_file, write_file, list_dir, edit_file, run_tests]
+LOCAL_TOOLS = [bash, read_file, write_file, list_dir, edit_file, run_tests, tavily_search]
 
 # Tools considered safe in "plan" mode: read-only, no filesystem/shell
 # mutation. bash is excluded entirely even though some commands are
 # harmless (e.g. `ls`) — there's no reliable way to tell a read-only shell
 # command from a destructive one without actually parsing it, so plan mode
 # blocks bash outright rather than trying to guess.
-_PLAN_SAFE_LOCAL_NAMES = {"read_file", "list_dir"}
+_PLAN_SAFE_LOCAL_NAMES = {"read_file", "list_dir", "tavily_search"}
 
 # Heuristic for filtering MCP tools (e.g. git) in plan mode: block anything
 # whose name suggests it mutates state. This is a name-based guess, not a

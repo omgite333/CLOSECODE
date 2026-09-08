@@ -1,30 +1,16 @@
-"""
-ui.py
-
-OpenCode-style chat terminal UI.
-
-Restyles the line-based streaming client to look like the opencode TUI:
-a conversation thread where user and assistant messages appear inline
-with labels, tool steps are marked with -> (read) / <- (write) arrows,
-each finished turn closes with a completion marker, and input sits in a
-divider-framed bar at the bottom. Colors are taken from the opencode
-default theme (dark variant).
-
-Like opencode, everything is left-aligned — only the boot header is
-centered. There is no full-screen rendering here: output flows
-line-by-line so the tool stream and the typewriter response stay
-compatible with the astream_events loop in main.py.
-"""
 
 import select
 import sys
 import threading
+
+from datetime import datetime
 
 from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.rule import Rule
+from rich.table import Table
 from rich.text import Text
 
 import pyfiglet
@@ -225,13 +211,45 @@ def print_notice(text: str, style: str = "dim") -> None:
     console.print(f"[{color}]{text}[/{color}]", overflow="ellipsis")
 
 
+def print_sessions(sessions: list) -> None:
+    """Render saved sessions with their metadata. `sessions` items are
+    session.SessionInfo dataclasses."""
+    if not sessions:
+        console.print(Text("No saved sessions yet.", style=TEXT_MUTED))
+        return
+    table = Table(title="sessions", title_justify="left",
+                  border_style=BORDER_SUBTLE, pad_edge=False)
+    table.add_column("#", justify="right", style=TEXT_MUTED, width=3)
+    table.add_column("name", no_wrap=True, style=TEXT, max_width=42, overflow="ellipsis")
+    table.add_column("mode", justify="center", style=ACCENT)
+    table.add_column("model", style=TEXT_MUTED, max_width=24, overflow="ellipsis")
+    table.add_column("msgs", justify="right", style=INFO)
+    table.add_column("updated", style=TEXT_MUTED)
+    for s in sessions:
+        when = datetime.fromtimestamp(s.updated_at).strftime("%b %d %H:%M")
+        table.add_row(
+            str(s.id),
+            s.name or "(unnamed)",
+            s.mode or "build",
+            s.model or "-",
+            str(s.message_count),
+            when,
+        )
+    console.print(table)
+    console.print(Text("/resume <id> to switch \u00b7 /delete <id> to remove",
+                       style=TEXT_MUTED))
+
+
 def print_help() -> None:
     text = (
         "/plan          switch to read-only plan mode (explore only, no writes/commits)\n"
         "/build         switch to build mode (all tools enabled)\n"
         "/model <id>    switch the active model for this session\n"
+        "/sessions      list saved sessions (SQLite) with metadata\n"
+        "/resume <id>   resume a saved conversation\n"
+        "/delete <id>   delete a saved session\n"
         "/usage         show cumulative token usage this session\n"
-        "/clear         clear conversation history (tools/session file untouched)\n"
+        "/clear         clear conversation history (session file untouched)\n"
         "/help          show this message\n"
         "esc            interrupt the agent mid-turn\n"
         "exit / quit    quit"

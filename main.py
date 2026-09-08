@@ -24,6 +24,7 @@ from langgraph.errors import GraphRecursionError  # noqa: E402
 import session  # noqa: E402
 import ui  # noqa: E402
 from agent import SYSTEM_PROMPT, build_graph  # noqa: E402
+from guardrails import check_user_input, redact_message  # noqa: E402
 from harness import Harness  # noqa: E402
 from llm import DEFAULT_MODEL  # noqa: E402
 from mcp_tools import get_git_repo_path, get_git_tools  # noqa: E402
@@ -34,6 +35,15 @@ from tools import LOCAL_TOOLS, bind_harness  # noqa: E402
 
 def system_message_for(mode: str) -> SystemMessage:
     return SystemMessage(content=SYSTEM_PROMPT + mode_system_note(mode))
+
+
+def set_system_message(messages: list, mode: str) -> None:
+    """Ensure a session's first message is the current system prompt, in the
+    right mode note, without clobbering a non-system first message."""
+    if messages and getattr(messages[0], "type", "") == "system":
+        messages[0] = system_message_for(mode)
+    else:
+        messages.insert(0, system_message_for(mode))
 
 
 def _looks_like_tool_json(text: str) -> bool:
@@ -117,6 +127,13 @@ async def run_turn(graph, messages: list, token_tracker: TokenTracker) -> list:
                 output = event["data"].get("output")
                 if output is not None:
                     token_tracker.add_from_message(output)
+                    _blocked, reason = redact_message(output)
+                    if reason:
+                        ui.print_notice(
+                            f"Guardrail \u2014 blocked {reason}. The flagged content was "
+                            "removed from conversation history.",
+                            style="bold red",
+                        )
                 if live is not None:
                     ui.stream_stop(live)
                     live = None
@@ -202,23 +219,35 @@ async def main():
     model_override = None
     token_tracker = TokenTracker()
 
-    graph = build_graph(filter_tools_for_mode(all_tools, mode), model_override)
-
-    resume = "--continue" in sys.argv
-    if resume:
-        session_path = session.latest_session_path()
-        loaded = session.load(session_path) if session_path else None
-        if loaded:
-            messages = loaded
-            ui.print_notice(f"Resumed session {session_path.name} ({len(messages)} messages)", style="cyan")
-        else:
-            session_path = session.new_session_path()
-            messages = [system_message_for(mode)]
-    else:
-        session_path = session.new_session_path()
-        messages = [system_message_for(mode)]
-
     model_name = model_override or os.environ.get("HF_MODEL_ID") or os.environ.get("OLLAMA_MODEL", DEFAULT_MODEL)
+
+    # Start fresh, or --continue resume the most-recently-used non-empty session
+    # from the SQLite store (metadata restores its mode/model too).
+    resume = "--continue" in sys.argv
+    current_id = session.latest_session_id() if resume else None
+    if current_id is not None:
+        loaded = session.load(current_id)
+        if loaded:
+            info = session.get_session(current_id)
+            if info is not None:
+                mode = info.mode or mode
+                if info.model and not model_override:
+                    model_override = info.model
+                    model_name = info.model
+            ui.print_notice(
+                f"Resumed session #{current_id} ({info.name if info else '(unnamed)'}, {len(loaded)} msgs)",
+                style="cyan",
+            )
+        else:
+            current_id = None
+
+    if current_id is None:
+        current_id = session.new_session(model=model_name, mode=mode)
+        loaded = None
+
+    messages = list(loaded) if loaded is not None else [system_message_for(mode)]
+
+    graph = build_graph(filter_tools_for_mode(all_tools, mode), model_override)
     ui.set_context(mode, model_name)
     ui.print_banner(model_name, str(harness.workdir), [t.name for t in all_tools])
 
@@ -242,13 +271,13 @@ async def main():
             if cmd == "plan":
                 mode = "plan"
                 graph = build_graph(filter_tools_for_mode(all_tools, mode), model_override)
-                messages[0] = system_message_for(mode)
+                set_system_message(messages, mode)
                 ui.set_context(mode, model_name)
                 ui.print_notice("Switched to PLAN mode \u2014 read-only tools only.", style="magenta")
             elif cmd == "build":
                 mode = "build"
                 graph = build_graph(filter_tools_for_mode(all_tools, mode), model_override)
-                messages[0] = system_message_for(mode)
+                set_system_message(messages, mode)
                 ui.set_context(mode, model_name)
                 ui.print_notice("Switched to BUILD mode \u2014 all tools enabled.", style="blue")
             elif cmd == "model":
@@ -260,6 +289,52 @@ async def main():
                     ui.print_notice(f"Switched model to {arg}", style="cyan")
                 else:
                     ui.print_notice("Usage: /model <model-id>", style="yellow")
+            elif cmd == "sessions":
+                ui.print_sessions(session.list_sessions())
+            elif cmd == "resume":
+                if not arg:
+                    ui.print_notice("Usage: /resume <session-id>  (see /sessions)", style="yellow")
+                    continue
+                try:
+                    sid = int(arg)
+                except ValueError:
+                    ui.print_notice("Usage: /resume <session-id>  (see /sessions)", style="yellow")
+                    continue
+                info = session.get_session(sid)
+                loaded = session.load(sid) if info else None
+                if info is None or not loaded:
+                    ui.print_notice(f"No resumable session #{sid}. See /sessions.", style="yellow")
+                    continue
+                if info.mode:
+                    mode = info.mode
+                if info.model and not model_override:
+                    model_override = info.model
+                    model_name = info.model
+                graph = build_graph(filter_tools_for_mode(all_tools, mode), model_override)
+                current_id = sid
+                messages = list(loaded)
+                set_system_message(messages, mode)
+                ui.set_context(mode, model_name)
+                ui.print_notice(
+                    f"Resumed session #{sid} ({info.name or '(unnamed)'}, {len(messages)} msgs)",
+                    style="cyan",
+                )
+            elif cmd == "delete":
+                if not arg:
+                    ui.print_notice("Usage: /delete <session-id>  (see /sessions)", style="yellow")
+                    continue
+                try:
+                    sid = int(arg)
+                except ValueError:
+                    ui.print_notice("Usage: /delete <session-id>  (see /sessions)", style="yellow")
+                    continue
+                if sid == current_id:
+                    ui.print_notice("Can't delete the active session. Resume a different one first.", style="yellow")
+                    continue
+                if session.delete_session(sid):
+                    ui.print_notice(f"Deleted session #{sid}.", style="yellow")
+                else:
+                    ui.print_notice(f"No session #{sid}. See /sessions.", style="yellow")
             elif cmd == "usage":
                 ui.print_token_usage(token_tracker.summary())
             elif cmd == "clear":
@@ -271,10 +346,15 @@ async def main():
                 ui.print_notice(f"Unknown command: /{cmd}  (try /help)", style="yellow")
             continue
 
+        guard = check_user_input(raw)
+        if guard is not None:
+            ui.print_notice(f"Guardrail \u2014 {guard}", style="bold red")
+            continue
+
         messages.append(HumanMessage(content=raw))
         ui.print_user_message(raw)
         messages = await run_turn(graph, messages, token_tracker)
-        session.save(session_path, messages)
+        session.save(current_id, messages, model=model_name, mode=mode)
 
 
 if __name__ == "__main__":

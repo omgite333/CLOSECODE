@@ -27,6 +27,42 @@ The agent operates inside `./sandbox` (configurable via `AGENT_WORKDIR`) and
 will ask for permission before running shell commands or writing files,
 unless `AGENT_AUTO_APPROVE=true`.
 
+## Persistent sessions (SQLite)
+
+Conversations are stored in `./sessions/sessions.db` as per-message rows plus
+session metadata (name, model, mode, created/updated timestamps, message
+count). Existing `session_*.json` files are auto-migrated into the DB on the
+first run.
+
+- `--continue` — resume the most recently used session (its mode/model are
+  restored from metadata).
+- `/sessions` — list all saved sessions with metadata.
+- `/resume <id>` — switch to a saved conversation.
+- `/delete <id>` — delete a saved session.
+- Each turn is saved automatically; a session's name is derived from its
+  first user message.
+
+## Guardrails
+
+The agent is scoped to coding only, and `guardrails.py` enforces that with
+four layers:
+
+1. **Input scope** — off-topic chatter (greetings, opinions, trivia, creative
+   writing, news takes) is redirected to a coding task, and clearly malicious
+   requests (keyloggers, account hacking, phishing kits) are refused before
+   they reach the model.
+2. **Command blocking** — destructive shells commands (`rm -rf /`, `mkfs`,
+   disk wipes, fork bombs, `curl | sh`, reverse shells) are blocked before
+   execution, *even when auto-approve is on*.
+3. **Write scanning** — file writes/edits containing malware indicators
+   (ransomware, keyloggers, miners, persistence, injection) are refused.
+4. **Output redaction** — the model's final answer is scanned and flagged
+   content is scrubbed from conversation history.
+
+These are conservative heuristics on top of the sandbox + per-action
+permission prompts, not a hard guarantee. Set `AGENT_DISABLE_GUARDRAILS=true`
+in `.env` to disable them entirely (only for trusted, isolated testing).
+
 ## A note on model choice
 
 Tool-calling reliability varies significantly across open Hugging Face
