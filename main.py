@@ -1,6 +1,7 @@
 
 
 import asyncio
+import contextlib
 import os
 import sys
 import time
@@ -47,16 +48,59 @@ def _looks_like_tool_json(text: str) -> bool:
 async def run_turn(graph, messages: list, token_tracker: TokenTracker) -> list:
     """Streams one user turn via astream_events. Prints tool calls/results
     as they happen, streams the final text response token-by-token into a
-    live-updating panel, and tracks token usage along the way."""
+    live-updating panel, and tracks token usage along the way.
+
+    Also races the event stream against an Esc keypress (watched on a
+    background thread by ui.EscListener) so the user can bail out of a turn
+    that's stuck, taking too long, or headed somewhere they don't want it
+    to go, without killing the whole process.
+    """
     ui.print_thinking()
 
     live = None
     text_buffer = ""
     final_messages = messages
     turn_start = time.monotonic()
+    interrupted = False
+
+    loop = asyncio.get_running_loop()
+    stop_event = asyncio.Event()
+    esc = ui.EscListener(loop, stop_event)
+    esc.start()
+
+    agen = graph.astream_events({"messages": messages}, version="v2")
 
     try:
-        async for event in graph.astream_events({"messages": messages}, version="v2"):
+        while True:
+            next_task = asyncio.ensure_future(agen.__anext__())
+            stop_task = asyncio.ensure_future(stop_event.wait())
+            try:
+                done, _pending = await asyncio.wait(
+                    {next_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
+                )
+            except asyncio.CancelledError:
+                next_task.cancel()
+                stop_task.cancel()
+                raise
+
+            if stop_task in done:
+                interrupted = True
+                next_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await next_task
+                with contextlib.suppress(Exception):
+                    await agen.aclose()
+                break
+
+            stop_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stop_task
+
+            try:
+                event = next_task.result()
+            except StopAsyncIteration:
+                break
+
             kind = event["event"]
 
             if kind == "on_chat_model_stream":
@@ -120,8 +164,18 @@ async def run_turn(graph, messages: list, token_tracker: TokenTracker) -> list:
         )
         return messages
     finally:
+        esc.stop()
         if live is not None:
             ui.stream_stop(live)
+
+    if interrupted:
+        ui.print_notice(
+            "Interrupted (Esc) \u2014 turn stopped early; any tool call already in "
+            "flight may still finish on its own. History kept up to the last "
+            "completed step.",
+            style="yellow",
+        )
+        return final_messages
 
     ui.print_turn_complete(time.monotonic() - turn_start)
     return final_messages

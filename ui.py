@@ -16,6 +16,10 @@ line-by-line so the tool stream and the typewriter response stay
 compatible with the astream_events loop in main.py.
 """
 
+import select
+import sys
+import threading
+
 from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
@@ -24,6 +28,19 @@ from rich.rule import Rule
 from rich.text import Text
 
 import pyfiglet
+
+try:
+    import termios
+    import tty
+    _HAS_TERMIOS = True
+except ImportError:  # pragma: no cover - Windows fallback
+    _HAS_TERMIOS = False
+
+try:
+    import msvcrt
+    _HAS_MSVCRT = True
+except ImportError:
+    _HAS_MSVCRT = False
 
 console = Console()
 
@@ -158,7 +175,10 @@ def stream_stop(live: Live) -> None:
 
 
 def print_thinking() -> None:
-    console.print(Text("thinking\u2026", style=TEXT_MUTED))
+    line = Text()
+    line.append("thinking\u2026 ", style=TEXT_MUTED)
+    line.append("(esc to interrupt)", style=TEXT_MUTED)
+    console.print(line)
 
 
 def _direction(name: str) -> str:
@@ -213,12 +233,80 @@ def print_help() -> None:
         "/usage         show cumulative token usage this session\n"
         "/clear         clear conversation history (tools/session file untouched)\n"
         "/help          show this message\n"
+        "esc            interrupt the agent mid-turn\n"
         "exit / quit    quit"
     )
     console.print(
         Panel(Text(text), title="commands", title_align="left",
               border_style=BORDER_SUBTLE)
     )
+
+
+class EscListener:
+    """Watches stdin for an Esc keypress on a background thread while a turn
+    is streaming, without blocking the asyncio event loop.
+
+    Terminal input is a blocking, thread-only affair (raw/cbreak mode via
+    termios), so this runs on its own thread and hands control back to the
+    event loop by calling `event.set()` through `loop.call_soon_threadsafe`.
+    Safe to call `start()`/`stop()` even when stdin isn't a real TTY (e.g.
+    piped input, some CI environments) — it just no-ops in that case.
+    """
+
+    def __init__(self, loop, event) -> None:
+        self._loop = loop
+        self._event = event
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if not sys.stdin.isatty():
+            return
+        if not _HAS_TERMIOS and not _HAS_MSVCRT:
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._watch, daemon=True)
+        self._thread.start()
+
+    def _signal_esc(self) -> None:
+        self._loop.call_soon_threadsafe(self._event.set)
+
+    def _watch(self) -> None:
+        if _HAS_TERMIOS:
+            self._watch_termios()
+        elif _HAS_MSVCRT:
+            self._watch_msvcrt()
+
+    def _watch_termios(self) -> None:
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setcbreak(fd)
+            while not self._stop.is_set():
+                ready, _, _ = select.select([sys.stdin], [], [], 0.1)
+                if ready:
+                    ch = sys.stdin.read(1)
+                    if ch == "\x1b":
+                        self._signal_esc()
+                        return
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+    def _watch_msvcrt(self) -> None:  # pragma: no cover - Windows only
+        while not self._stop.is_set():
+            if msvcrt.kbhit():
+                ch = msvcrt.getch()
+                if ch == b"\x1b":
+                    self._signal_esc()
+                    return
+            else:
+                self._stop.wait(0.1)
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=0.3)
+            self._thread = None
 
 
 def confirm(question: str) -> str:
