@@ -1,8 +1,16 @@
 
+
 import asyncio
 import os
 import sys
 import time
+import warnings
+
+warnings.filterwarnings(
+    "ignore",
+    message="Core Pydantic V1 functionality isn't compatible with Python 3.14",
+    category=UserWarning,
+)
 
 from dotenv import load_dotenv
 
