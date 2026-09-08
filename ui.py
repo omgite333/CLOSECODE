@@ -1,3 +1,20 @@
+"""
+ui.py
+
+OpenCode-style chat terminal UI.
+
+Restyles the line-based streaming client to look like the opencode TUI:
+a conversation thread where user and assistant messages appear inline
+with labels, tool steps are marked with -> (read) / <- (write) arrows,
+each finished turn closes with a completion marker, and input sits in a
+divider-framed bar at the bottom. Colors are taken from the opencode
+default theme (dark variant).
+
+Like opencode, everything is left-aligned — only the boot header is
+centered. There is no full-screen rendering here: output flows
+line-by-line so the tool stream and the typewriter response stay
+compatible with the astream_events loop in main.py.
+"""
 
 from rich.console import Console, Group
 from rich.live import Live
@@ -9,6 +26,16 @@ from rich.text import Text
 import pyfiglet
 
 console = Console()
+
+# Simple, solid block wordmark for "OGBOT" — no fancy/decorative figlet
+# fonts, just clean filled rectangles. Falls back to a plain bold pyfiglet
+# render for any other banner text.
+_BLOCK_GLYPHS = {
+    "O": ["█████", "█   █", "█   █", "█   █", "█████"],
+    "G": ["█████", "█    ", "█  ██", "█   █", "█████"],
+    "B": ["████ ", "█   █", "████ ", "█   █", "████ "],
+    "T": ["█████", "  █  ", "  █  ", "  █  ", "  █  "],
+}
 
 # ---- opencode default theme (dark variant) --------------------------------
 BG = "#0a0a0a"
@@ -52,8 +79,21 @@ def set_context(mode: str, model_name: str) -> None:
 
 
 def _banner_art(text: str, font: str = "standard") -> Text:
-    art = pyfiglet.figlet_format(text, font=font)
-    lines = art.rstrip("\n").split("\n")
+    """Simple, solid banner. If every character in `text` has a hand-drawn
+    block glyph (currently just what's needed for "OGBOT"), render clean
+    filled rectangles. Otherwise fall back to a plain pyfiglet font for
+    arbitrary text."""
+    if text and all(ch in _BLOCK_GLYPHS for ch in text.upper()):
+        rows = ["" for _ in range(5)]
+        for ch in text.upper():
+            glyph = _BLOCK_GLYPHS[ch]
+            for i in range(5):
+                rows[i] += glyph[i] + " "
+        lines = [row.rstrip() for row in rows]
+    else:
+        art = pyfiglet.figlet_format(text, font=font)
+        lines = art.rstrip("\n").split("\n")
+
     result = Text()
     for line in lines:
         result.append(line, style=f"bold {PRIMARY}")
