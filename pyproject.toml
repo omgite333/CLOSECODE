@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "closecode-ai"
+version = "0.1.0"
+description = "CloseCode — an agentic terminal coding assistant (LangGraph + OpenRouter + MCP)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Om Gite" }]
+dependencies = [
+    "langchain",
+    "langgraph",
+    "langchain-huggingface",
+    "langsmith",
+    "huggingface_hub",
+    "python-dotenv",
+    "requests",
+    "langchain-openai",
+    "langchain-mcp-adapters",
+    "mcp-server-git",
+    "langchain-openrouter",
+    "rich",
+    "pyfiglet",
+]
+
+# `closecode` command -> main:cli_entry
+[project.scripts]
+closecode = "main:cli_entry"
+
+# Flat layout: every top-level .py file is a module to ship.
+[tool.setuptools]
+py-modules = [
+    "agent",
+    "debug_response",
+    "guardrails",
+    "harness",
+    "llm",
+    "main",
+    "mcp_tools",
+    "modes",
+    "search",
+    "session",
+    "todos",
+    "token_tracker",
+    "tools",
+    "ui",
+]

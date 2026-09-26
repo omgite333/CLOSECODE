@@ -26,11 +26,18 @@ import ui  # noqa: E402
 from agent import SYSTEM_PROMPT, build_graph  # noqa: E402
 from guardrails import check_user_input, redact_message  # noqa: E402
 from harness import Harness  # noqa: E402
-from llm import DEFAULT_MODEL, KNOWN_MODELS, fetch_openrouter_models, resolve_model_arg  # noqa: E402
+from llm import DEFAULT_MODEL, KNOWN_MODELS, fetch_openrouter_models, get_llm, resolve_model_arg  # noqa: E402
 from mcp_tools import get_git_repo_path, get_git_tools  # noqa: E402
 from modes import filter_tools_for_mode, mode_system_note  # noqa: E402
+from search import SEARCH_TOOLS, bind_search_root  # noqa: E402
+from todos import TODO_TOOLS, TodoStore, bind_todo_store  # noqa: E402
 from token_tracker import TokenTracker  # noqa: E402
 from tools import LOCAL_TOOLS, bind_harness  # noqa: E402
+
+
+# Module-global todo store, bound to the todo tools once at startup and
+# cleared whenever the session changes (new session, /resume, /clear).
+todo_store = TodoStore()
 
 
 def system_message_for(mode: str) -> SystemMessage:
@@ -148,6 +155,8 @@ async def run_turn(graph, messages: list, token_tracker: TokenTracker) -> list:
                 if content is None:
                     content = str(output)
                 ui.print_tool_result(str(content))
+                if event.get("name") == "todo_write":
+                    ui.print_todos(todo_store.get())
 
             elif kind == "on_chain_end" and event.get("name") == "LangGraph":
                 output = event["data"].get("output")
@@ -244,6 +253,39 @@ def ensure_api_key() -> str:
     return key
 
 
+COMPACT_PROMPT = """You are summarizing a coding-assistant session so work can continue
+in a fresh context window. Write a dense, structured summary covering:
+
+1. What the user was trying to accomplish (the overall goal)
+2. What was actually done — files created/modified, commands run, key decisions
+3. Current state — what's working, what's unfinished or broken
+4. Anything the user explicitly asked to remember, plus useful context
+   (paths, model choices, config values) needed to continue seamlessly
+
+Be concrete: name files, functions, and decisions. Skip greetings and
+small talk. Write it so another agent could pick up exactly where this
+one left off."""
+
+
+async def compact_messages(messages: list, model_override: str = None) -> str:
+    """Summarize the conversation with the plain LLM (no tools) and return
+    the summary text. Long tool outputs are truncated so the summarizer
+    itself doesn't blow the context window."""
+    llm = get_llm(model_override)
+    lines = []
+    for m in messages:
+        role = getattr(m, "type", "?")
+        content = m.content if isinstance(m.content, str) else str(m.content)
+        if len(content) > 2000:
+            content = content[:2000] + "…[truncated]"
+        lines.append(f"[{role}] {content}")
+    convo = "\n\n".join(lines)
+    summary = await llm.ainvoke(
+        [SystemMessage(content=COMPACT_PROMPT), HumanMessage(content=convo)]
+    )
+    return summary.content if isinstance(summary.content, str) else str(summary.content)
+
+
 async def main():
     ensure_api_key()
 
@@ -253,8 +295,10 @@ async def main():
 
     harness = Harness(workdir=workdir, auto_approve=auto_approve, confirm_fn=ui.confirm)
     bind_harness(harness)
+    bind_todo_store(todo_store)
+    bind_search_root(str(harness.workdir))
 
-    all_tools = list(LOCAL_TOOLS)
+    all_tools = list(LOCAL_TOOLS) + SEARCH_TOOLS + TODO_TOOLS
     if use_git:
         repo_path = get_git_repo_path()
         try:
@@ -398,6 +442,7 @@ async def main():
                 graph = build_graph(filter_tools_for_mode(all_tools, mode), model_override)
                 current_id = sid
                 messages = list(loaded)
+                todo_store.clear()
                 set_system_message(messages, mode)
                 ui.set_context(mode, model_name)
                 ui.print_notice(
@@ -424,7 +469,30 @@ async def main():
                 ui.print_token_usage(token_tracker.summary())
             elif cmd == "clear":
                 messages = [system_message_for(mode)]
+                todo_store.clear()
                 ui.print_notice("History cleared.")
+            elif cmd == "compact":
+                if len(messages) <= 2:
+                    ui.print_notice("Nothing to compact yet.", style="yellow")
+                else:
+                    ui.print_notice("Compacting conversation…", style="dim")
+                    old_count = len(messages)
+                    try:
+                        summary = await compact_messages(messages, model_override)
+                    except Exception as e:
+                        ui.print_notice(f"Compaction failed: {e}", style="bold red")
+                        continue
+                    messages = [
+                        system_message_for(mode),
+                        HumanMessage(
+                            content="[Summary of earlier conversation]\n" + summary
+                        ),
+                    ]
+                    session.save(current_id, messages, model=model_name, mode=mode)
+                    ui.print_notice(
+                        f"Compacted {old_count} messages into a summary.",
+                        style="green",
+                    )
             elif cmd == "help":
                 ui.print_help()
             else:
@@ -440,6 +508,12 @@ async def main():
         ui.print_user_message(raw)
         messages = await run_turn(graph, messages, token_tracker)
         session.save(current_id, messages, model=model_name, mode=mode)
+
+
+def cli_entry():
+    """Entry point for the `closecode` console script (see pyproject.toml
+    [project.scripts]). Installed via pip/pipx, runs the async main()."""
+    asyncio.run(main())
 
 
 if __name__ == "__main__":
