@@ -1,229 +1,229 @@
-# terminal-agent
+<div align="center">
 
-## Your AI Coding Assistant
+# CloseCode
 
-**terminal-agent** is a helpful AI coding partner that lives right in your terminal. It can read your code, make changes, run tests, and help you debug—all through natural language commands.
+**An agentic terminal coding assistant — LangGraph loop, sandboxed execution, and a full-screen TUI.**
 
-Think of it as having a smart programmer buddy who can:
-- 📖 Read and understand your code
-- ✏️ Make changes to files
-- ▶️ Run commands and tests
-- 🔍 Search for information online
-- 💾 Remember your work across sessions
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+<!-- Once CI exists, add: [![CI](https://github.com/omgite333/CLOSECODE/actions/workflows/ci.yml/badge.svg)](https://github.com/omgite333/CLOSECODE/actions) -->
 
-## How It Works (Simple Explanation)
+<!-- SCREENSHOT: full-screen TUI on startup — banner, model name, workdir, tool list.
+     Capture: run `closecode`, wait for the banner, screenshot the terminal.
+     Save as: docs/banner.png -->
+![CloseCode banner](docs/banner.png)
 
-The agent follows a simple loop:
-1. **You give it a task** (like "fix this bug" or "add a login feature")
-2. **It thinks about what to do** and picks the right tools
-3. **It does the work** (reads files, runs commands, makes changes)
-4. **It sees what happened** and adjusts if needed
-5. **It repeats until the task is done**
+</div>
 
-This is similar to how other AI coding assistants work, but built with modern AI frameworks.
+---
 
-## Quick Start Guide
+CloseCode reads a task, decides what to do, runs a tool, looks at the result, and repeats —
+the same loop as OpenCode or Claude Code, built from scratch on LangGraph (agent loop),
+LangChain (tool + model abstraction), and OpenRouter (model access). It runs entirely in
+your terminal, in a full-screen TUI or a classic line-based mode, and every action it takes
+on your files or shell goes through a sandboxed harness with permission prompts.
 
-### Step 1: Install Everything
+
+## Why
+
+Most people can't `pip install openai` and get an agent — the hard part isn't calling a
+model, it's the loop around it: binding the right tools per mode, confirming risky actions,
+persisting sessions, and stopping the model from doing something destructive. CloseCode is
+that scaffolding, built openly, with open models via OpenRouter instead of a closed API.
+
+## Features
+
+- **Full-screen TUI** (Textual) or a classic line-based REPL — same agent loop underneath,
+  switchable with `--no-tui`
+- **Sandboxed execution** — file and shell operations are confined to a working directory;
+  path traversal (`../../etc/passwd`, absolute paths, Windows drive prefixes) is blocked
+  at the harness level, not just by convention
+- **Plan / Build modes** — Plan mode literally never binds write/edit/bash tools to the
+  model, so it can explore and propose a plan with no possibility of a side effect
+- **Guardrails** — four layers: input-scope filtering, destructive-command blocking
+  (`rm -rf /`, fork bombs, `curl | sh`), malicious-write scanning, and output redaction
+- **Persistent sessions** — SQLite-backed conversation history; `/resume`, `/sessions`,
+  `--continue`
+- **Todo tracking** — the agent maintains a visible task list for multi-step work
+  (`todo_write` / `todo_read`)
+- **Code-aware search** — dedicated `grep`/`glob` tools (not raw shell), sandboxed and
+  available even in Plan mode since they're read-only
+- **Git tools via MCP** — status, diff, log, commit, branches, through `mcp-server-git`
+- **Any OpenRouter model** — free-tier models by default; switch with `/model`, browse
+  with `/models`
+- **Per-user config** — your API key and default model persist in `~/.closecode/config.json`
+  (0600 permissions), independent of which directory you launch from
+
+## Install
+
 ```bash
-pip install -r requirements.txt
+pipx install closecode-ai
+closecode
 ```
 
-### Step 2: Get Your API Key
-You need an API key from [OpenRouter](https://openrouter.ai/settings/keys) (it's free to sign up).
+<!-- Adjust this section once published — this is the target state, not necessarily
+     live yet. Until it's on PyPI, use the git-based install below instead. -->
 
-### Step 3: Set Up Your Environment
+**From source, right now:**
+
 ```bash
-cp .env.example .env
+git clone https://github.com/omgite333/CLOSECODE.git
+cd CLOSECODE
+pip install -e .
+closecode
 ```
 
-Edit the `.env` file and add your OpenRouter API key:
+`pipx` is recommended over `pip` for the packaged version since it installs CLI tools into
+an isolated environment and puts them straight on your `PATH`.
+
+## Quick start
+
+1. Get a free API key at [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys)
+2. Run `closecode` — on first launch it prompts for the key (input hidden) and offers to
+   save it to `~/.closecode/config.json` so you're not asked again
+3. Type a task:
+
+   ```
+   > find every place we call the old auth API and list the files
+   ```
+
+<!-- SCREENSHOT: a permission prompt in action — "Allow agent to run: `grep -r ...`?"
+     This is worth showing on its own since it's the project's core safety story.
+     Save as: docs/permission-prompt.png -->
+![Permission prompt](docs/permission-prompt.png)
+
+## How it works
+
 ```
-OPENROUTER_API_KEY=your_actual_api_key_here
-```
-
-### Step 4: Run the Agent
-```bash
-python main.py
-```
-
-The agent will start and ask for your API key if you haven't set it up yet.
-
-## Two Modes for Safe Work
-
-The agent has two modes to help you work safely:
-
-### 🔍 **Plan Mode** (`/plan`)
-- **What it is**: Safe, look-but-don't-touch mode
-- **What you can do**: Read files, search for information, explore code
-- **What you CANNOT do**: Change files, run commands, make modifications
-- **Best for**: Understanding a codebase before making changes
-
-### 🛠️ **Build Mode** (`/build`)
-- **What it is**: Full access mode
-- **What you can do**: Everything in Plan mode PLUS edit files, run commands, make changes
-- **Best for**: Actually implementing fixes and features
-
-Switch modes anytime with `/plan` or `/build`.
-
-## What the Agent Can Do (Tools)
-
-| Tool | What it does | Example use |
-|------|-------------|-------------|
-| `read_file` | Look at any text file | "Show me the main.py file" |
-| `write_file` | Create or replace files | "Create a new config file" |
-| `edit_file` | Make precise changes | "Fix the typo in line 42" |
-| `list_dir` | See what's in a folder | "What files are in src/?" |
-| `bash` | Run terminal commands | "Run the tests" or "Install this package" |
-| `run_tests` | Run your test suite | "Are all tests passing?" |
-| `tavily_search` | Search the web | "How do I use React hooks?" |
-| `todo_write` / `todo_read` | Manage task lists | "Break this feature into steps" |
-
-## Helpful Commands
-
-### Managing Your Work
-- `/sessions` - See all your saved conversations
-- `/resume <id>` - Continue a previous session
-- `/delete <id>` - Delete a saved session
-- `--continue` - Automatically resume last session when starting
-
-### Choosing Your AI
-- `/models` - See available AI models (free ones first)
-- `/model <number>` - Switch to a different model
-- `/key` - Change your API key
-
-### Other Useful Commands
-- `/help` - Show all available commands
-- `/clear` - Start fresh with a new session
-- `/usage` - Check how much AI you've used
-- `/compact` - Clean up old session data
-
-## Saving and Coming Back Later
-
-Your work is automatically saved! You can:
-1. **Start fresh**: Just type your first task when you run the agent
-2. **Come back later**: Use `/sessions` to see past work, then `/resume <number>`
-3. **Auto-continue**: Run `python main.py --continue` to pick up where you left off
-
-Each session remembers:
-- Which AI model you were using
-- Whether you were in Plan or Build mode
-- A name based on what you first asked for
-
-## Safety First
-
-The agent has built-in protections to keep you safe:
-
-### 🛡️ **Smart Input Filtering**
-- Blocks requests for harmful things (like hacking tools)
-- Redirects off-topic chat back to coding tasks
-- Prevents obvious security risks
-
-### ⚠️ **Command Safety**
-- Blocks dangerous commands (like deleting your whole system)
-- Stops reverse shells and other risky operations
-- Works even if you turn on auto-approval
-
-### 🔍 **Content Checking**
-- Scans file changes for malicious code patterns
-- Prevents creating harmful software
-- Asks for confirmation before risky actions
-
-### ✋ **Permission Prompts**
-- Asks before running commands: "Allow agent to run: `npm install`?"
-- Asks before writing files: "Allow agent to write 500 chars to `config.json`?"
-- You can skip these with `AGENT_AUTO_APPROVE=true` in `.env` (not recommended for beginners)
-
-## Choosing an AI Model
-
-Different AI models work better for coding. Here's a quick guide:
-
-### 🏆 **Top Recommendations**
-1. **Qwen/Qwen2.5-72B-Instruct** - Great balance of ability and speed
-2. **meta-llama/Meta-Llama-3.1-70B-Instruct** - Very reliable for coding tasks
-3. **meta-llama/Meta-Llama-3.1-8B-Instruct** - Fastest/cheapest, but less reliable
-
-### 💰 **Free vs Paid**
-- **Free models** (marked `:free`): Cost nothing to use
-- **Paid models**: More consistent, but charge per usage
-
-### 🔄 **How to Switch Models**
-1. Type `/models` to see the list
-2. Type `/model 3` to use the 3rd model in the list
-3. Or type the full name: `/model qwen/qwen-2.5-72b-instruct`
-
-## Common Things You Can Do
-
-### 🐛 **Fixing Bugs**
-> "Why is my login function throwing an error on line 23?"
-
-### 🔍 **Exploring Code**
-> "Show me all the Python files and explain what each one does"
-
-### ✨ **Adding Features**
-> "Add a dark mode toggle to this website"
-
-### 🧹 **Cleaning Up Code**
-> "Refactor this function to be easier to read"
-
-### 📚 **Writing Documentation**
-> "Create a README explaining how to install and use this project"
-
-### ✅ **Testing**
-> "Run all the tests and tell me what's failing"
-
-## Troubleshooting Tips
-
-### ❌ "Agent isn't responding"
-- Check your internet connection (needed for AI calls)
-- Verify your API key is correct in `.env`
-- Try a different model: `/model meta-llama/Meta-Llama-3.1-70B-Instruct`
-
-### ⚙️ "Commands aren't working"
-- Make sure you're in the right project folder
-- Check if files exist: try `list_dir` first
-- Start in Plan mode (`/plan`) to explore safely
-
-### 💾 "My work isn't saving"
-- Work saves automatically after each turn
-- Use `/sessions` to see all saved conversations
-- Use `--continue` when starting to resume previous work
-
-### 🤖 "AI keeps making mistakes"
-- Try a more reliable model (the paid ones often work better)
-- Break your task into smaller steps
-- Use Plan mode first to understand the problem
-
-## Advanced Features (When You're Ready)
-
-### 📊 **See What the Agent is Doing**
-If you get a LangChain API key (free at smith.langchain.com):
-1. Add `LANGCHAIN_API_KEY=your_key` to `.env`
-2. Watch detailed traces at https://smith.langchain.com
-
-### 📂 **Work with Git**
-Enable with `AGENT_ENABLE_GIT=true` to use:
-- `git status` - See what changed
-- `git diff` - View exact changes
-- `git commit` - Save your work
-
-### 🗂️ **Use a Sandbox Folder**
-Keep experiments separate:
-```bash
-AGENT_WORKDIR=./sandbox python main.py
-```
-This keeps the agent confined to a specific folder.
-
-## Ready to Try?
-
-Just run:
-```bash
-python main.py
+ user input
+     │
+     ▼
+ ┌──────────┐   binds tools for current mode     ┌───────────────┐
+ │  agent   │ ───────────────────────────────▶ │ LangGraph loop│
+ │ (llm.py) │                                   │  (agent.py)   │
+ └──────────┘                                    └──────┬────────┘
+                                                        │ tool call
+                                                        ▼
+                                              ┌───────────────────────┐
+                                              │      Harness          │
+                                              │ sandboxed fs + shell  │──▶ guardrails.py
+                                              └───────────────────────┘     (blocks/scans)
+                                                        │ result
+                                                        ▼
+                                              ┌──────────────────────┐
+                                              │  Renderer interface  │
+                                              │ (render.py)          │
+                                              └──────┬──────────┬────┘
+                                                     ▼          ▼
+                                              tui.py (Textual)  ui.py (classic)
 ```
 
-Then try something simple like:
-- "What files are in this project?"
-- "Explain what this code does" (point it at a file)
-- "Help me fix this error" (share the error message)
+A single `Renderer` interface (`render.py`) decouples the agent loop from presentation, so
+the Textual TUI and the classic REPL are two implementations of the same contract rather
+than two copies of the agent logic.
 
-The agent is here to help you code better and faster. Happy coding! 🚀
+## Modes
+
+| Mode | Command | Tools available | Use for |
+|---|---|---|---|
+| **Plan** | `/plan` | Read-only: `read_file`, `list_dir`, `grep`, `glob`, `tavily_search` | Exploring a codebase, proposing an approach with zero risk of a side effect |
+| **Build** | `/build` | Everything, including `write_file`, `edit_file`, `bash`, `run_tests`, git tools | Actually making changes |
+
+Plan mode isn't a prompt instruction the model can ignore — the write/edit/bash tools are
+never bound to the model in the first place.
+
+## Tools
+
+| Tool | Description |
+|---|---|
+| `read_file` / `write_file` / `edit_file` | Read, overwrite, or targeted find-and-replace on a file |
+| `list_dir` | List a directory's contents |
+| `glob` / `grep` | Find files by pattern / search file contents by regex — sandboxed, available in Plan mode |
+| `bash` | Run a shell command in the sandbox (capped timeout, guardrail-checked) |
+| `run_tests` | Run the project's test command and report pass/fail |
+| `todo_write` / `todo_read` | Maintain a visible multi-step task list |
+| `tavily_search` | Web search for current docs/APIs (requires `TAVILY_API_KEY`) |
+| git tools (`status`, `diff`, `log`, `commit`, branches) | Via `mcp-server-git`, enabled with `AGENT_ENABLE_GIT=true` |
+
+## Commands
+
+```
+/plan, /build         switch modes
+/models [filter]      list OpenRouter models (free-tier first)
+/model <id|number>    switch model
+/key                  update your OpenRouter API key
+/sessions             list saved conversations
+/resume <id>          switch to a saved session
+/delete <id>          delete a saved session
+/usage                token usage for this session
+/clear                start a new session
+/help                 show all commands
+```
+
+## Configuration
+
+All settings are environment variables (`.env`, or exported in your shell) — see
+`.env.example` for the full list. Key ones:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `OPENROUTER_API_KEY` | — | Required (or saved via `/key` into `~/.closecode/config.json`) |
+| `OPENROUTER_MODEL` | `nvidia/nemotron-3.5-lightning:free` | Default model |
+| `AGENT_WORKDIR` | `./sandbox` | Directory the agent is confined to |
+| `AGENT_AUTO_APPROVE` | `false` | Skip permission prompts (guardrails still apply) |
+| `AGENT_ENABLE_GIT` | `false` | Load git tools via MCP |
+| `AGENT_DISABLE_GUARDRAILS` | `false` | Disable guardrails — trusted/isolated testing only |
+| `TAVILY_API_KEY` | — | Enables `tavily_search` |
+| `LANGCHAIN_API_KEY` | — | Enables LangSmith tracing |
+
+## Safety model
+
+This is layered defense, not a single mechanism:
+
+1. **Input scope** — off-topic requests are redirected; clearly malicious requests
+   (keyloggers, phishing kits, account-hacking) are refused before reaching the model
+2. **Command blocking** — destructive shell commands are blocked before execution, even
+   with auto-approve on
+3. **Write scanning** — file writes/edits are scanned for malware indicators before
+   they're applied
+4. **Output redaction** — flagged content is scrubbed from conversation history
+5. **Sandboxed paths** — every file operation resolves through the harness, which refuses
+   to write outside the configured working directory regardless of how the path is phrased
+
+These are conservative heuristics layered on top of the sandbox and per-action permission
+prompts — not a formal guarantee. Shell commands currently run on the host inside a
+path-restricted directory, not inside a container; see [Roadmap](#roadmap).
+
+## A note on model choice
+
+Tool-calling reliability varies a lot across open models — this is the single biggest
+factor in how well the agent performs. Frontier closed models are heavily trained for
+reliable tool use; open models are improving but inconsistent. Roughly in order of
+reliability, worth trying via `/model`:
+
+- `qwen/qwen-2.5-coder-32b-instruct` — code-specialized, solid tool use, free tier available
+- `qwen/qwen-2.5-72b-instruct` — strong, reliable, paid
+- `meta-llama/llama-3.1-70b-instruct` — strong, reliable, paid
+- `meta-llama/llama-3.1-8b-instruct` — fastest/cheapest, least reliable
+
+If a smaller model frequently fails to call tools or hallucinates arguments, that's a
+known gap between open and closed models on agentic tasks, not a bug here. Switching
+models is the first thing to try before changing anything else.
+
+## Roadmap
+
+- [ ] Test suite + CI (guardrails, sandbox path resolution, todo-store invariants)
+- [ ] Docker-based sandbox for shell execution, not just path restriction
+- [ ] Client/server split — `build_graph()` behind FastAPI/WebSocket, thin streaming client
+- [ ] PyPI release + prebuilt binaries (PyInstaller) for no-Python-required installs
+- [ ] Homebrew tap
+
+## Contributing
+
+Issues and PRs welcome. If you're adding a tool, follow the pattern in `tools.py` /
+`search.py`: bind state via a module-level `bind_*()` function, keep it sandboxed to the
+harness root, and add it to the Plan-mode allowlist only if it's genuinely read-only.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
