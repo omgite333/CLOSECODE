@@ -27,6 +27,21 @@ If `OPENROUTER_API_KEY` isn't set (env or `.env`), the agent prompts you to
 paste one at startup — input is hidden — and offers to save it to `.env`
 for next time. You can rotate it later with the `/key` command.
 
+## Tools
+
+| Tool | What it does |
+|---|---|
+| `read_file` / `write_file` / `edit_file` / `list_dir` | file operations inside the working directory |
+| `bash` / `run_tests` | foreground shell (capped at 5 min) |
+| `bash_background` / `bash_poll` | long-running commands (servers, watchers, builds) |
+| `glob` / `grep` | find files and search contents (work in plan mode too) |
+| `todo_write` / `todo_read` | task list the agent maintains for multi-step work |
+| `tavily_search` | web search (needs `TAVILY_API_KEY`) |
+| git (MCP) | status/diff/log/commit… (needs `AGENT_ENABLE_GIT=true`) |
+
+Commands: `/plan`, `/build`, `/models`, `/model`, `/key`, `/compact`,
+`/sessions`, `/resume`, `/delete`, `/usage`, `/clear`, `/help`.
+
 ## Switching models
 
 ```text
@@ -43,7 +58,8 @@ shortlist. The model choice is saved per session, so `/resume` restores
 the model you were using. Free-tier `:free` models cost nothing; check
 https://openrouter.ai/models for paid-model pricing before switching.
 
-The agent operates inside `./sandbox` (configurable via `AGENT_WORKDIR`) and
+The agent operates in the directory you launch it from (override with
+`AGENT_WORKDIR=./sandbox` to jail it to a subfolder) and
 will ask for permission before running shell commands or writing files,
 unless `AGENT_AUTO_APPROVE=true`.
 

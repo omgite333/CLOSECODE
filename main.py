@@ -331,7 +331,10 @@ async def build_context(render: Renderer, esc_factory, key_prompter,
     frontends — each one then runs its own input loop on the returned ctx."""
     ensure_api_key()
 
-    workdir = os.environ.get("AGENT_WORKDIR", "./sandbox")
+    # Work in the directory closecode was launched from (like Claude Code /
+    # opencode). Set AGENT_WORKDIR=./sandbox (or any path) to jail the agent
+    # to a subfolder instead.
+    workdir = os.environ.get("AGENT_WORKDIR", ".")
     auto_approve = os.environ.get("AGENT_AUTO_APPROVE", "false").lower() == "true"
     use_git = os.environ.get("AGENT_ENABLE_GIT", "false").lower() == "true"
 
@@ -392,6 +395,24 @@ async def build_context(render: Renderer, esc_factory, key_prompter,
     return ctx
 
 
+async def _show_models(ctx: AgentCtx, r, arg: str) -> None:
+    """Fetch the OpenRouter model list and render it (shared by /models
+    and bare /model, which acts as a picker)."""
+    parts = arg.split()
+    force = "--refresh" in parts
+    query = " ".join(p for p in parts if p != "--refresh").strip().lower()
+    r.notice("Fetching model list from OpenRouter…", style="dim")
+    models, source = await asyncio.to_thread(fetch_openrouter_models, force_refresh=force)
+    if query:
+        models = [m for m in models
+                  if query in m[0].lower() or query in m[1].lower()]
+        if not models:
+            r.notice(f"No models match '{query}'.", style="yellow")
+            return
+    ctx.listed_models = models
+    r.models(models, ctx.model_name, source=source, query=query or None)
+
+
 async def handle_command(ctx: AgentCtx, cmd: str, arg: str) -> None:
     """Slash-command dispatch shared by both frontends. Mutates ctx."""
     r = ctx.render
@@ -409,7 +430,8 @@ async def handle_command(ctx: AgentCtx, cmd: str, arg: str) -> None:
         r.notice("Switched to BUILD mode \u2014 all tools enabled.", style="blue")
     elif cmd == "model":
         if not arg:
-            r.notice("Usage: /model <number|model-id>  (see /models)", style="yellow")
+            # No arg: show the model list so the user can pick a number.
+            await _show_models(ctx, r, "")
         else:
             new_model = resolve_model_arg(arg, ctx.listed_models)
             if arg.strip().isdigit() and new_model == arg.strip():
@@ -425,19 +447,7 @@ async def handle_command(ctx: AgentCtx, cmd: str, arg: str) -> None:
                 r.set_context(ctx.mode, ctx.model_name)
                 r.notice(f"Switched model to {new_model}", style="cyan")
     elif cmd == "models":
-        parts = arg.split()
-        force = "--refresh" in parts
-        query = " ".join(p for p in parts if p != "--refresh").strip().lower()
-        r.notice("Fetching model list from OpenRouter…", style="dim")
-        models, source = await asyncio.to_thread(fetch_openrouter_models, force_refresh=force)
-        if query:
-            models = [m for m in models
-                      if query in m[0].lower() or query in m[1].lower()]
-            if not models:
-                r.notice(f"No models match '{query}'.", style="yellow")
-                return
-        ctx.listed_models = models
-        r.models(models, ctx.model_name, source=source, query=query or None)
+        await _show_models(ctx, r, arg)
     elif cmd == "key":
         key = await ctx.key_prompter()
         if not key:

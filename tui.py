@@ -36,6 +36,29 @@ from render import Renderer
 
 
 # ---------------------------------------------------------------------------
+# Big centered "CLOSECODE" banner for the header (5x5 block-letter font).
+# ---------------------------------------------------------------------------
+
+_BIG_FONT = {
+    "C": [" ████", "█    ", "█    ", "█    ", " ████"],
+    "D": ["████ ", "█   █", "█   █", "█   █", "████ "],
+    "E": ["█████", "█    ", "████ ", "█    ", "█████"],
+    "L": ["█    ", "█    ", "█    ", "█    ", "█████"],
+    "O": [" ███ ", "█   █", "█   █", "█   █", " ███ "],
+    "S": [" ████", "█    ", " ███ ", "    █", "████ "],
+}
+
+
+def _big_title(text: str) -> str:
+    return "\n".join(
+        " ".join(_BIG_FONT[ch][r] for ch in text) for r in range(5)
+    )
+
+
+BIG_TITLE = _big_title("CLOSECODE")
+
+
+# ---------------------------------------------------------------------------
 # messages: renderer -> app
 # ---------------------------------------------------------------------------
 
@@ -386,7 +409,7 @@ COMMANDS = [
     ("/plan", "switch to read-only plan mode"),
     ("/build", "switch to build mode (all tools)"),
     ("/models", "list OpenRouter models"),
-    ("/model", "switch model by number or id"),
+    ("/model", "list models / switch by number or id"),
     ("/key", "paste a new OpenRouter API key"),
     ("/sessions", "list saved sessions"),
     ("/resume", "resume a saved session"),
@@ -411,26 +434,35 @@ class HelpBlock(Static):
 
 
 class WelcomeBlock(Static):
-    def __init__(self, model: str, workdir: str, tool_names: list):
+    def __init__(self, model: str, mode: str, tool_names: list):
         super().__init__()
         self._model = model
-        self._workdir = workdir
+        self._mode = mode
         self._tool_names = tool_names
 
     def compose(self) -> ComposeResult:
-        yield Label("CLOSECODE", classes="welcome-title")
-        body = Text()
-        body.append(f"model   {self._model}\n", style="#808080")
-        body.append(f"workdir {self._workdir}\n", style="#808080")
-        body.append(f"tools   {', '.join(self._tool_names)}\n\n", style="#808080")
-        body.append("Type a task and hit Enter. ", style="#808080")
-        body.append("/help", style="#fab283")
-        body.append(" for commands · ", style="#808080")
-        body.append("esc", style="#fab283")
-        body.append(" interrupts · ", style="#808080")
-        body.append("ctrl+q", style="#fab283")
-        body.append(" quits", style="#808080")
-        yield Static(body)
+        yield Static("", classes="welcome-gap")
+        info = Text()
+        info.append(self._mode, style="#5c9cf5")
+        info.append(" · ", style="#3c3c3c")
+        info.append(self._model, style="#fab283")
+        info.append(f" · {len(self._tool_names)} tools", style="#808080")
+        yield Label(info, classes="welcome-line")
+        hints = Text()
+        hints.append("Type a task and hit Enter. ", style="#808080")
+        hints.append("/help", style="#fab283")
+        hints.append(" for commands · ", style="#808080")
+        hints.append("esc", style="#fab283")
+        hints.append(" interrupts · ", style="#808080")
+        hints.append("ctrl+q", style="#fab283")
+        hints.append(" quits", style="#808080")
+        yield Label(hints, classes="welcome-line")
+        tip = Text()
+        tip.append("● Tip  ", style="#fab283")
+        tip.append("Run ", style="#808080")
+        tip.append("/model", style="#eeeeee")
+        tip.append(" to list and switch models", style="#808080")
+        yield Label(tip, classes="welcome-line")
 
 
 # ---------------------------------------------------------------------------
@@ -603,20 +635,27 @@ class CloseCodeApp(App):
         color: #eeeeee;
     }
     #header {
-        height: 3;
+        height: 8;
         background: #0a0a0a;
         border-bottom: solid #3c3c3c;
-        padding: 0 1;
+        padding-top: 1;
     }
     #header-title {
         color: #fab283;
         text-style: bold;
-        width: auto;
+        text-align: center;
     }
-    #header-right {
+    #header-sub {
         color: #808080;
+        text-align: center;
+    }
+    .welcome-gap {
+        height: 2;
+    }
+    .welcome-line {
         width: 1fr;
-        text-align: right;
+        text-align: center;
+        margin-bottom: 1;
     }
     #conversation {
         height: 1fr;
@@ -648,11 +687,6 @@ class CloseCodeApp(App):
     }
     .tool-body {
         margin-left: 2;
-    }
-    .welcome-title {
-        color: #fab283;
-        text-style: bold;
-        margin-top: 1;
     }
     #suggest {
         display: none;
@@ -738,9 +772,9 @@ class CloseCodeApp(App):
 
     # -- layout -----------------------------------------------------------
     def compose(self) -> ComposeResult:
-        with Horizontal(id="header"):
-            yield Label("CLOSECODE", id="header-title")
-            yield Label("", id="header-right")
+        with Vertical(id="header"):
+            yield Static(BIG_TITLE, id="header-title")
+            yield Label("", id="header-sub")
         yield VerticalScroll(id="conversation")
         with Container(id="suggest"):
             yield ListView(id="suggest-list")
@@ -752,11 +786,11 @@ class CloseCodeApp(App):
         conv = self.query_one("#conversation", VerticalScroll)
         await conv.mount(WelcomeBlock(
             self.ctx.model_name,
-            str(self.ctx.harness.workdir),
+            self.ctx.mode,
             [t.name for t in self.ctx.all_tools],
         ))
         try:
-            self.query_one("#header-right", Label).update(str(self.ctx.harness.workdir))
+            self.query_one("#header-sub", Label).update(str(self.ctx.harness.workdir))
         except Exception:
             pass
         self._refresh_statusbar()
