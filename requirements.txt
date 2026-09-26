@@ -11,3 +11,4 @@ mcp-server-git
 langchain-openrouter
 rich
 pyfiglet
+textual

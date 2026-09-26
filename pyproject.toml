@@ -24,6 +24,7 @@ dependencies = [
     "langchain-openrouter",
     "rich",
     "pyfiglet",
+    "textual",
 ]
 
 # `closecode` command -> main:cli_entry

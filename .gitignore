@@ -2,3 +2,5 @@
 sessions
 sandbox
 __pycache__
+dist/*
+closecode_ai.egg-info
