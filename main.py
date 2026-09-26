@@ -26,7 +26,7 @@ import ui  # noqa: E402
 from agent import SYSTEM_PROMPT, build_graph  # noqa: E402
 from guardrails import check_user_input, redact_message  # noqa: E402
 from harness import Harness  # noqa: E402
-from llm import DEFAULT_MODEL  # noqa: E402
+from llm import DEFAULT_MODEL, KNOWN_MODELS, fetch_openrouter_models, resolve_model_arg  # noqa: E402
 from mcp_tools import get_git_repo_path, get_git_tools  # noqa: E402
 from modes import filter_tools_for_mode, mode_system_note  # noqa: E402
 from token_tracker import TokenTracker  # noqa: E402
@@ -198,7 +198,55 @@ async def run_turn(graph, messages: list, token_tracker: TokenTracker) -> list:
     return final_messages
 
 
+def save_key_to_dotenv(key: str) -> None:
+    """Persist an API key into .env (creating the file if needed), replacing
+    any existing OPENROUTER_API_KEY line. .env is gitignored, so the key
+    never lands in version control."""
+    path = ".env"
+    lines: list[str] = []
+    if os.path.exists(path):
+        with open(path) as f:
+            lines = f.read().splitlines()
+    updated = False
+    for i, line in enumerate(lines):
+        if line.strip().startswith("OPENROUTER_API_KEY="):
+            lines[i] = f"OPENROUTER_API_KEY={key}"
+            updated = True
+    if not updated:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.append(f"OPENROUTER_API_KEY={key}")
+    with open(path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def ensure_api_key() -> str:
+    """Make sure an OpenRouter API key is available. If OPENROUTER_API_KEY
+    isn't set (env or .env), prompt the user to paste one — hidden input —
+    and offer to save it to .env for next time. Exits if no key is given,
+    since the agent can't call a model without one."""
+    key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if key:
+        return key
+    ui.print_notice("No OPENROUTER_API_KEY found in env or .env.", style="yellow")
+    key = ui.prompt_api_key()
+    if not key:
+        ui.print_notice(
+            "No API key provided — the agent can't run without one. "
+            "Set OPENROUTER_API_KEY and restart.",
+            style="bold red",
+        )
+        raise SystemExit(1)
+    os.environ["OPENROUTER_API_KEY"] = key
+    if ui.confirm_save_key():
+        save_key_to_dotenv(key)
+        ui.print_notice("Saved to .env", style="green")
+    return key
+
+
 async def main():
+    ensure_api_key()
+
     workdir = os.environ.get("AGENT_WORKDIR", "./sandbox")
     auto_approve = os.environ.get("AGENT_AUTO_APPROVE", "false").lower() == "true"
     use_git = os.environ.get("AGENT_ENABLE_GIT", "false").lower() == "true"
@@ -218,6 +266,10 @@ async def main():
     mode = "build"
     model_override = None
     token_tracker = TokenTracker()
+    # Models shown by the most recent /models listing — /model <number>
+    # resolves against this. Starts as the curated shortlist so numbers
+    # work even before /models is ever run.
+    listed_models: list = list(KNOWN_MODELS)
 
     model_name = model_override or os.environ.get("HF_MODEL_ID") or os.environ.get("OLLAMA_MODEL", DEFAULT_MODEL)
 
@@ -281,14 +333,47 @@ async def main():
                 ui.set_context(mode, model_name)
                 ui.print_notice("Switched to BUILD mode \u2014 all tools enabled.", style="blue")
             elif cmd == "model":
-                if arg:
-                    model_override = arg
-                    model_name = arg
-                    graph = build_graph(filter_tools_for_mode(all_tools, mode), model_override)
-                    ui.set_context(mode, model_name)
-                    ui.print_notice(f"Switched model to {arg}", style="cyan")
+                if not arg:
+                    ui.print_notice("Usage: /model <number|model-id>  (see /models)", style="yellow")
                 else:
-                    ui.print_notice("Usage: /model <model-id>", style="yellow")
+                    new_model = resolve_model_arg(arg, listed_models)
+                    if arg.strip().isdigit() and new_model == arg.strip():
+                        ui.print_notice(
+                            f"No model #{arg.strip()} in the current list — run /models "
+                            "first (or pass a full OpenRouter model id).",
+                            style="yellow",
+                        )
+                    else:
+                        model_override = new_model
+                        model_name = new_model
+                        graph = build_graph(filter_tools_for_mode(all_tools, mode), model_override)
+                        ui.set_context(mode, model_name)
+                        ui.print_notice(f"Switched model to {new_model}", style="cyan")
+            elif cmd == "models":
+                parts = arg.split()
+                force = "--refresh" in parts
+                query = " ".join(p for p in parts if p != "--refresh").strip().lower()
+                ui.print_notice("Fetching model list from OpenRouter…", style="dim")
+                models, source = fetch_openrouter_models(force_refresh=force)
+                if query:
+                    models = [m for m in models
+                              if query in m[0].lower() or query in m[1].lower()]
+                    if not models:
+                        ui.print_notice(f"No models match '{query}'.", style="yellow")
+                        continue
+                listed_models = models
+                ui.print_models(models, model_name, source=source, query=query or None)
+            elif cmd == "key":
+                key = ui.prompt_api_key()
+                if not key:
+                    ui.print_notice("No key entered — keeping the current one.", style="yellow")
+                else:
+                    os.environ["OPENROUTER_API_KEY"] = key
+                    if ui.confirm_save_key():
+                        save_key_to_dotenv(key)
+                        ui.print_notice("Saved to .env", style="green")
+                    graph = build_graph(filter_tools_for_mode(all_tools, mode), model_override)
+                    ui.print_notice("API key updated.", style="green")
             elif cmd == "sessions":
                 ui.print_sessions(session.list_sessions())
             elif cmd == "resume":

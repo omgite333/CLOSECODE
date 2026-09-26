@@ -4,6 +4,7 @@ import sys
 import threading
 
 from datetime import datetime
+from getpass import getpass
 
 from rich.console import Console, Group
 from rich.live import Live
@@ -244,7 +245,9 @@ def print_help() -> None:
     text = (
         "/plan          switch to read-only plan mode (explore only, no writes/commits)\n"
         "/build         switch to build mode (all tools enabled)\n"
-        "/model <id>    switch the active model for this session\n"
+        "/models [q]   list OpenRouter models (● = current); --refresh updates\n"
+        "/model <n|id>  switch model by list number or any OpenRouter model id\n"
+        "/key           paste a new OpenRouter API key (optionally saved to .env)\n"
         "/sessions      list saved sessions (SQLite) with metadata\n"
         "/resume <id>   resume a saved conversation\n"
         "/delete <id>   delete a saved session\n"
@@ -258,6 +261,66 @@ def print_help() -> None:
         Panel(Text(text), title="commands", title_align="left",
               border_style=BORDER_SUBTLE)
     )
+
+
+def prompt_api_key() -> str:
+    """Ask the user to paste their OpenRouter API key without echoing it
+    to the terminal. Returns the stripped key, or "" if nothing entered."""
+    console.print()
+    console.print(Text("Paste your OpenRouter API key (input is hidden).", style=f"bold {WARNING}"))
+    console.print(Text("Get one at https://openrouter.ai/settings/keys", style=TEXT_MUTED))
+    try:
+        key = getpass("key: ")
+    except Exception:
+        # getpass can fail when stdin isn't a real TTY — fall back to a
+        # visible prompt rather than crashing.
+        key = console.input("key: ")
+    return (key or "").strip()
+
+
+def confirm_save_key() -> bool:
+    """Ask whether the just-pasted key should persist into .env."""
+    answer = console.input("Save this key to .env for next time? [y/N] ").strip().lower()
+    return answer in ("y", "yes")
+
+
+_MODELS_DISPLAY_LIMIT = 80
+
+
+def print_models(models: list, current: str, source: str = "live", query: str = None) -> None:
+    """Render a model list (from /models), starring the active model.
+
+    The live OpenRouter list has hundreds of entries, so only the first
+    _MODELS_DISPLAY_LIMIT rows are shown — the footer says how to narrow
+    it. Numbering matches list position so `/model <number>` picks the
+    row the user sees.
+    """
+    total = len(models)
+    shown = models[:_MODELS_DISPLAY_LIMIT]
+    table = Table(title="models", title_justify="left",
+                  border_style=BORDER_SUBTLE, pad_edge=False)
+    table.add_column("#", justify="right", style=TEXT_MUTED, width=4)
+    table.add_column("", width=2)
+    table.add_column("model id", style=TEXT, no_wrap=True, max_width=44, overflow="ellipsis")
+    table.add_column("notes", style=TEXT_MUTED, max_width=40, overflow="ellipsis")
+    for i, (mid, note) in enumerate(shown, 1):
+        marker = Text("●", style=PRIMARY) if mid == current else Text(" ")
+        table.add_row(str(i), marker, mid, note)
+    console.print(table)
+
+    footer = Text()
+    if source == "cache":
+        footer.append("from cache (24h) · ", style=TEXT_MUTED)
+    elif source == "fallback":
+        footer.append("offline — showing curated shortlist · ", style=WARNING)
+    if query:
+        footer.append(f"{total} match '{query}'", style=TEXT_MUTED)
+    else:
+        footer.append(f"showing {len(shown)} of {total}", style=TEXT_MUTED)
+    console.print(footer)
+    hints = Text("/model <number> to switch · /models <query> to filter · /models --refresh to update",
+                 style=TEXT_MUTED)
+    console.print(hints)
 
 
 class EscListener:

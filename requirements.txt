@@ -4,6 +4,7 @@ langchain-huggingface
 langsmith
 huggingface_hub
 python-dotenv
+requests
 langchain-openai
 langchain-mcp-adapters
 mcp-server-git

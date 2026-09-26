@@ -23,6 +23,26 @@ Edit `.env`:
 python main.py
 ```
 
+If `OPENROUTER_API_KEY` isn't set (env or `.env`), the agent prompts you to
+paste one at startup — input is hidden — and offers to save it to `.env`
+for next time. You can rotate it later with the `/key` command.
+
+## Switching models
+
+```text
+/models            list all OpenRouter models (● = current, free first)
+/models qwen       filter the list by name
+/models --refresh  force a fresh fetch (list is cached for 24h)
+/model 12          switch by list number
+/model qwen/qwen-2.5-72b-instruct   or any OpenRouter model id directly
+```
+
+The list comes live from OpenRouter's API and is cached for 24 hours in
+`~/.cache/closecode/`; if you're offline it falls back to a curated
+shortlist. The model choice is saved per session, so `/resume` restores
+the model you were using. Free-tier `:free` models cost nothing; check
+https://openrouter.ai/models for paid-model pricing before switching.
+
 The agent operates inside `./sandbox` (configurable via `AGENT_WORKDIR`) and
 will ask for permission before running shell commands or writing files,
 unless `AGENT_AUTO_APPROVE=true`.
