@@ -1,5 +1,13 @@
+"""Session persistence using SQLite, stored in a user-level directory
+(~/.closecode/sessions/sessions.db by default) instead of the project
+folder. The location can be overridden with the CLOSECODE_SESSIONS_DIR
+env var (mainly so tests can point it at a temp dir).
+"""
+
+from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -8,7 +16,19 @@ from typing import Optional
 
 from langchain_core.messages import messages_from_dict, messages_to_dict
 
-SESSIONS_DIR = Path("./sessions")
+SESSIONS_DIR_ENV = "CLOSECODE_SESSIONS_DIR"
+SESSIONS_DIR_NAME = "sessions"
+
+
+def _sessions_dir() -> Path:
+    """User-level sessions directory, created on first use."""
+    override = os.environ.get(SESSIONS_DIR_ENV, "").strip()
+    base = Path(override).expanduser() if override else Path.home() / ".closecode" / SESSIONS_DIR_NAME
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+SESSIONS_DIR = _sessions_dir()
 DB_PATH = SESSIONS_DIR / "sessions.db"
 
 _SCHEMA = """
