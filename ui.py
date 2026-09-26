@@ -11,6 +11,7 @@ from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.rule import Rule
+from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
@@ -207,6 +208,25 @@ def print_token_usage(summary: str) -> None:
     console.print(Text(summary, style=TEXT_MUTED))
 
 
+def print_todos(items: list) -> None:
+    """Render the agent's todo list (called after todo_write)."""
+    if not items:
+        return
+    console.print()
+    console.print(Text("todos", style=f"bold {ACCENT}"))
+    icons = {"pending": "○", "in_progress": "◐", "completed": "✓"}
+    for it in items:
+        line = Text()
+        line.append("  ", style=TEXT)
+        line.append(f"{icons.get(it.get('status'), '?')} ", style=TEXT_MUTED)
+        content = it.get("content", "")
+        if it.get("status") == "completed":
+            line.append(content, style=f"strike {TEXT_MUTED}")
+        else:
+            line.append(content, style=TEXT)
+        console.print(line)
+
+
 def print_notice(text: str, style: str = "dim") -> None:
     color = _NAMED_STYLES.get(style, style)
     console.print(f"[{color}]{text}[/{color}]", overflow="ellipsis")
@@ -252,6 +272,7 @@ def print_help() -> None:
         "/resume <id>   resume a saved conversation\n"
         "/delete <id>   delete a saved session\n"
         "/usage         show cumulative token usage this session\n"
+        "/undo [n]      revert the last n file changes the agent made\n"
         "/clear         clear conversation history (session file untouched)\n"
         "/help          show this message\n"
         "esc            interrupt the agent mid-turn\n"
@@ -390,10 +411,30 @@ class EscListener:
             self._thread = None
 
 
-def confirm(question: str) -> str:
+def confirm(question: str, details: dict | None = None) -> str:
     """Permission prompt styled like an opencode permission dialog.
-    Returns "allow", "always", or "deny"."""
+
+    When `details` carries a diff (kind == "diff"), the colorized unified
+    diff is printed first so the user approves the actual change, not a
+    blind "write N chars" summary. Returns "allow", "always", or "deny".
+    """
     console.print()
+    if details and details.get("kind") == "diff":
+        lines = details.get("lines", [])
+        total = details.get("total_lines", len(lines))
+        shown = "\n".join(lines)
+        if total > len(lines):
+            shown += f"\n… {total - len(lines)} more lines"
+        title = f"diff · {details.get('path', '')} · {details.get('stat', '')}"
+        if details.get("new_file"):
+            title += " · new file"
+        console.print(
+            Panel(
+                Syntax(shown or "(no changes)", "diff", theme="ansi_dark"),
+                title=title, title_align="left",
+                border_style=BORDER_SUBTLE, padding=(0, 1),
+            )
+        )
     body = Text()
     body.append("\u25b3 ", style=f"bold {WARNING}")
     body.append(f"Allow agent to {question}?", style=TEXT)

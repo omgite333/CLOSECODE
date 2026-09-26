@@ -62,6 +62,36 @@ def run_tests(command: str = "pytest") -> str:
     return _require_harness().run_tests(command)
 
 
+@tool
+def start_background(command: str, label: str = "") -> str:
+    """Start a shell command as a background process (dev server, watcher, tunnel) and return immediately with a process id like "bg1". Stdout/stderr stream to .closecode/bg/<id>.log. Use tail_logs to watch output, list_background for status, kill_background to stop it. Same sandbox and permission rules as bash."""
+    return _require_harness().start_background(command, label=label)
+
+
+@tool
+def list_background() -> str:
+    """List background processes started with start_background: id, label, status (running/exited), pid, age, and command."""
+    return _require_harness().list_background()
+
+
+@tool
+def tail_logs(proc_id: str, lines: int = 30) -> str:
+    """Read the last N lines (default 30, max 200) of a background process's log. Use this to watch a dev server's output, spot crashes, and decide what to fix next."""
+    return _require_harness().tail_logs(proc_id, lines=lines)
+
+
+@tool
+def kill_background(proc_id: str) -> str:
+    """Stop a background process: SIGTERM to its process group, SIGKILL if it doesn't exit within 3s. The log file is kept and stays readable via tail_logs."""
+    return _require_harness().kill_background(proc_id)
+
+
+@tool
+def undo_last_change(n: int = 1) -> str:
+    """Revert the last n file change(s) you made with write_file/edit_file (default 1). Restores each file's prior content, or deletes files you created. Only covers your own file writes — shell side effects can't be undone. The user can also do this themselves with /undo."""
+    return _require_harness().undo_last(n)
+
+
 _TAVILY_API_URL = "https://api.tavily.com/search"
 
 
@@ -97,7 +127,9 @@ def tavily_search(query: str, max_results: int = 5) -> str:
 
 # Local (non-MCP) tools. main.py combines this with any MCP-provided tools
 # (e.g. git) before binding to the model.
-LOCAL_TOOLS = [bash, read_file, write_file, list_dir, edit_file, run_tests, tavily_search]
+LOCAL_TOOLS = [bash, read_file, write_file, list_dir, edit_file, run_tests,
+               start_background, list_background, tail_logs, kill_background,
+               undo_last_change, tavily_search]
 
 # Tools considered safe in "plan" mode: read-only, no filesystem/shell
 # mutation. bash is excluded entirely even though some commands are

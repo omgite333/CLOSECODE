@@ -415,6 +415,7 @@ COMMANDS = [
     ("/resume", "resume a saved session"),
     ("/delete", "delete a saved session"),
     ("/usage", "show token usage this session"),
+    ("/undo", "revert last file change(s): /undo [n]"),
     ("/clear", "clear conversation history"),
     ("/compact", "summarize history into fresh context"),
     ("/help", "show this help"),
@@ -635,7 +636,7 @@ class CloseCodeApp(App):
         color: #eeeeee;
     }
     #header {
-        height: 8;
+        height: 7;
         background: #0a0a0a;
         border-bottom: solid #3c3c3c;
         padding-top: 1;
@@ -645,9 +646,10 @@ class CloseCodeApp(App):
         text-style: bold;
         text-align: center;
     }
-    #header-sub {
-        color: #808080;
+    #current-file {
+        height: 1;
         text-align: center;
+        margin-top: 1;
     }
     .welcome-gap {
         height: 2;
@@ -774,7 +776,7 @@ class CloseCodeApp(App):
     def compose(self) -> ComposeResult:
         with Vertical(id="header"):
             yield Static(BIG_TITLE, id="header-title")
-            yield Label("", id="header-sub")
+        yield Static("", id="current-file")
         yield VerticalScroll(id="conversation")
         with Container(id="suggest"):
             yield ListView(id="suggest-list")
@@ -790,7 +792,11 @@ class CloseCodeApp(App):
             [t.name for t in self.ctx.all_tools],
         ))
         try:
-            self.query_one("#header-sub", Label).update(str(self.ctx.harness.workdir))
+            self.query_one("#current-file", Static).update(
+                Text.from_markup(
+                    f"[#808080]current file · [/#808080][#eeeeee]{self.ctx.harness.workdir}[/#eeeeee]"
+                )
+            )
         except Exception:
             pass
         self._refresh_statusbar()

@@ -536,6 +536,15 @@ async def handle_command(ctx: AgentCtx, cmd: str, arg: str) -> None:
                 f"Compacted {old_count} messages into a summary.",
                 style="green",
             )
+    elif cmd == "undo":
+        n = 1
+        if arg:
+            try:
+                n = int(arg.strip())
+            except ValueError:
+                r.notice("Usage: /undo [n]  (revert the last n file changes)", style="yellow")
+                return
+        r.notice(ctx.harness.undo_last(n))
     elif cmd == "help":
         r.help()
     else:

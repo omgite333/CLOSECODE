@@ -1,5 +1,7 @@
 
-PLAN_MODE_BLOCKED_EXACT = {"bash", "write_file", "edit_file"}
+PLAN_MODE_BLOCKED_EXACT = {"bash", "write_file", "edit_file",
+                           "start_background", "kill_background",
+                           "undo_last_change"}
 PLAN_MODE_BLOCKED_KEYWORDS = [
     "commit", "push", "checkout", "reset", "merge", "rebase",
     "add", "rm", "delete", "remove", "stash", "write", "create_branch",
