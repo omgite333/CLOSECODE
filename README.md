@@ -76,6 +76,22 @@ closecode
 `pipx` is recommended over `pip` for the packaged version since it installs CLI tools into
 an isolated environment and puts them straight on your `PATH`.
 
+## Tests
+
+```bash
+pip install -e ".[dev]"
+pytest
+```
+
+429 tests covering guardrails, sandbox path resolution, undo/checkpoints, background
+processes, todo-store invariants, plan-mode tool filtering, session persistence, config
+permissions, and the search tools. The suite is fully isolated: `config.py` and
+`session.py` are redirected to temp dirs, no test touches the network, and nothing is
+written to your real `~/.closecode`.
+
+Some tests are marked `xfail` for **known bugs** rather than fixed behaviour — they
+document a gap and will flip to passing when it's fixed. Run `pytest -rx` to list them.
+
 ## Quick start
 
 1. Get a free API key at [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys)
@@ -115,12 +131,25 @@ an isolated environment and puts them straight on your `PATH`.
                                               │ (render.py)          │
                                               └──────┬──────────┬────┘
                                                      ▼          ▼
-                                              tui.py (Textual)  ui.py (classic)
+                                               tui.py + tui_*.py  ui.py + ui_*.py
+                                               (Textual)          (classic)
 ```
 
 A single `Renderer` interface (`render.py`) decouples the agent loop from presentation, so
 the Textual TUI and the classic REPL are two implementations of the same contract rather
 than two copies of the agent logic.
+
+Each frontend is a small set of single-purpose modules behind a facade, so the entry module
+stays readable and the parts can be reused or tested on their own:
+
+| Frontend | Facade | Split into |
+|---|---|---|
+| Textual | `tui.py` — app, message handlers, input, suggestions | `tui_theme.py` (banner, palette, CSS) · `tui_messages.py` (Message classes, `TuiRenderer`) · `tui_widgets.py` (conversation blocks, input box, modals, `ConfirmBridge`) |
+| Classic | `ui.py` — the `print_*` / `stream_*` renderers | `ui_theme.py` (shared `Console`, palette, banner) · `ui_prompts.py` (permission dialog, input, `EscListener`) |
+
+Each facade re-exports the names its split modules define, so `from ui import ...` and
+`from tui import ...` keep working exactly as before.
+
 
 ## Modes
 
@@ -212,7 +241,8 @@ models is the first thing to try before changing anything else.
 
 ## Roadmap
 
-- [ ] Test suite + CI (guardrails, sandbox path resolution, todo-store invariants)
+- [x] Test suite (`pytest tests/`) — guardrails, sandbox path resolution, todo-store invariants
+- [ ] CI (run the suite on push)
 - [ ] Docker-based sandbox for shell execution, not just path restriction
 - [ ] Client/server split — `build_graph()` behind FastAPI/WebSocket, thin streaming client
 - [ ] PyPI release + prebuilt binaries (PyInstaller) for no-Python-required installs

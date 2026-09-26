@@ -1,77 +1,49 @@
+"""The Rich CLI renderer: everything the app *prints*.
 
-import select
-import sys
-import threading
+The interactive half (permission prompts, the input box, Esc-to-interrupt) is
+in ui_prompts.py and the palette in ui_theme.py; this module is the read-only
+output side plus the re-exports that keep `import ui` working unchanged for
+render.py, main.py, and anything else that talks to the old flat namespace.
+"""
 
 from datetime import datetime
-from getpass import getpass
 
-from rich.console import Console, Group
+from rich.console import Group
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.rule import Rule
-from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
-import pyfiglet
+from ui_theme import (
+    ACCENT,
+    BORDER_SUBTLE,
+    INFO,
+    PRIMARY,
+    SECONDARY,
+    TEXT,
+    TEXT_MUTED,
+    WARNING,
+    _banner_art,
+    _NAMED_STYLES,
+    _READ_KINDS,
+    console,
+)
 
-try:
-    import termios
-    import tty
-    _HAS_TERMIOS = True
-except ImportError:  # pragma: no cover - Windows fallback
-    _HAS_TERMIOS = False
+# Re-exported so callers that reach for the interactive helpers through `ui`
+# (main.py builds an EscListener and asks for API keys) keep working against
+# the same objects that ui_prompts defines.
+from ui_prompts import (  # noqa: F401
+    EscListener,
+    confirm,
+    confirm_save_key,
+    prompt_api_key,
+    user_prompt,
+)
 
-try:
-    import msvcrt
-    _HAS_MSVCRT = True
-except ImportError:
-    _HAS_MSVCRT = False
-
-console = Console()
-
-# Simple, solid block wordmark for "OGBOT" — no fancy/decorative figlet
-# fonts, just clean filled rectangles. Falls back to a plain bold pyfiglet
-# render for any other banner text.
-_BLOCK_GLYPHS = {
-    "O": ["█████", "█   █", "█   █", "█   █", "█████"],
-    "G": ["█████", "█    ", "█  ██", "█   █", "█████"],
-    "B": ["████ ", "█   █", "████ ", "█   █", "████ "],
-    "T": ["█████", "  █  ", "  █  ", "  █  ", "  █  "],
-}
-
-# ---- opencode default theme (dark variant) --------------------------------
-BG = "#0a0a0a"
-BG_PANEL = "#141414"
-PRIMARY = "#fab283"  # peach  -> agent label / write arrows
-SECONDARY = "#5c9cf5"  # blue   -> "you" label
-ACCENT = "#9d7cd8"  # purple -> mode accents
-ERROR = "#e06c75"
-WARNING = "#f5a742"
-SUCCESS = "#7fd88f"
-INFO = "#56b6c2"  # cyan   -> read arrows
-TEXT = "#eeeeee"
-TEXT_MUTED = "#808080"
-BORDER = "#484848"
-BORDER_SUBTLE = "#3c3c3c"
-
-# Tool names containing these treat as read-only (->), everything else is
-# a write (<-). Mirrors opencode's arrow direction for tool calls.
-_READ_KINDS = ("read", "list", "status", "diff", "log", "show", "grep", "search")
-
-# Map the loose rich color names used by callers onto the opencode palette.
-_NAMED_STYLES = {
-    "dim": TEXT_MUTED,
-    "yellow": WARNING,
-    "red": ERROR,
-    "green": SUCCESS,
-    "cyan": INFO,
-    "magenta": ACCENT,
-    "blue": SECONDARY,
-}
-
+# Current agent mode and model, remembered for labels and turn markers. Lives
+# here rather than in ui_theme because the renderers below are what read it.
 _context_mode = "build"
 _context_model = ""
 
@@ -81,29 +53,6 @@ def set_context(mode: str, model_name: str) -> None:
     global _context_mode, _context_model
     _context_mode = mode
     _context_model = model_name
-
-
-def _banner_art(text: str, font: str = "standard") -> Text:
-    """Simple, solid banner. If every character in `text` has a hand-drawn
-    block glyph (currently just what's needed for "OGBOT"), render clean
-    filled rectangles. Otherwise fall back to a plain pyfiglet font for
-    arbitrary text."""
-    if text and all(ch in _BLOCK_GLYPHS for ch in text.upper()):
-        rows = ["" for _ in range(5)]
-        for ch in text.upper():
-            glyph = _BLOCK_GLYPHS[ch]
-            for i in range(5):
-                rows[i] += glyph[i] + " "
-        lines = [row.rstrip() for row in rows]
-    else:
-        art = pyfiglet.figlet_format(text, font=font)
-        lines = art.rstrip("\n").split("\n")
-
-    result = Text()
-    for line in lines:
-        result.append(line, style=f"bold {PRIMARY}")
-        result.append("\n")
-    return result
 
 
 def print_banner(model_name: str, sandbox_path: str, tool_names: list[str]) -> None:
@@ -164,7 +113,7 @@ def stream_stop(live: Live) -> None:
 
 def print_thinking() -> None:
     line = Text()
-    line.append("thinking\u2026 ", style=TEXT_MUTED)
+    line.append("thinking… ", style=TEXT_MUTED)
     line.append("(esc to interrupt)", style=TEXT_MUTED)
     console.print(line)
 
@@ -176,13 +125,13 @@ def _direction(name: str) -> str:
 def print_tool_call(name: str, args: dict) -> None:
     line = Text()
     if _direction(name) == "read":
-        line.append("\u2192 ", style=f"bold {INFO}")
+        line.append("→ ", style=f"bold {INFO}")
     else:
-        line.append("\u2190 ", style=f"bold {PRIMARY}")
+        line.append("← ", style=f"bold {PRIMARY}")
     line.append(name, style=f"bold {TEXT}")
     args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
     if len(args_str) > 140:
-        args_str = args_str[:140] + "\u2026"
+        args_str = args_str[:140] + "…"
     if args_str:
         line.append(f"({args_str})", style=TEXT_MUTED)
     console.print(line)
@@ -191,16 +140,16 @@ def print_tool_call(name: str, args: dict) -> None:
 def print_tool_result(content: str) -> None:
     preview = content.strip().splitlines()[0] if content.strip() else ""
     if len(preview) > 120:
-        preview = preview[:120] + "\u2026"
+        preview = preview[:120] + "…"
     console.print(Text(preview, style=TEXT_MUTED))
 
 
 def print_turn_complete(duration: float) -> None:
     console.print()
     marker = Text()
-    marker.append("\u25a3 ", style=TEXT_MUTED)
+    marker.append("▣ ", style=TEXT_MUTED)
     marker.append(_context_mode, style=f"bold {PRIMARY}")
-    marker.append(f" \u00b7 {duration:.1f}s", style=TEXT_MUTED)
+    marker.append(f" · {duration:.1f}s", style=TEXT_MUTED)
     console.print(marker)
 
 
@@ -257,7 +206,7 @@ def print_sessions(sessions: list) -> None:
             when,
         )
     console.print(table)
-    console.print(Text("/resume <id> to switch \u00b7 /delete <id> to remove",
+    console.print(Text("/resume <id> to switch · /delete <id> to remove",
                        style=TEXT_MUTED))
 
 
@@ -282,27 +231,6 @@ def print_help() -> None:
         Panel(Text(text), title="commands", title_align="left",
               border_style=BORDER_SUBTLE)
     )
-
-
-def prompt_api_key() -> str:
-    """Ask the user to paste their OpenRouter API key without echoing it
-    to the terminal. Returns the stripped key, or "" if nothing entered."""
-    console.print()
-    console.print(Text("Paste your OpenRouter API key (input is hidden).", style=f"bold {WARNING}"))
-    console.print(Text("Get one at https://openrouter.ai/settings/keys", style=TEXT_MUTED))
-    try:
-        key = getpass("key: ")
-    except Exception:
-        # getpass can fail when stdin isn't a real TTY — fall back to a
-        # visible prompt rather than crashing.
-        key = console.input("key: ")
-    return (key or "").strip()
-
-
-def confirm_save_key() -> bool:
-    """Ask whether the just-pasted key should persist into .env."""
-    answer = console.input("Save this key to .env for next time? [y/N] ").strip().lower()
-    return answer in ("y", "yes")
 
 
 _MODELS_DISPLAY_LIMIT = 80
@@ -342,122 +270,3 @@ def print_models(models: list, current: str, source: str = "live", query: str = 
     hints = Text("/model <number> to switch · /models <query> to filter · /models --refresh to update",
                  style=TEXT_MUTED)
     console.print(hints)
-
-
-class EscListener:
-    """Watches stdin for an Esc keypress on a background thread while a turn
-    is streaming, without blocking the asyncio event loop.
-
-    Terminal input is a blocking, thread-only affair (raw/cbreak mode via
-    termios), so this runs on its own thread and hands control back to the
-    event loop by calling `event.set()` through `loop.call_soon_threadsafe`.
-    Safe to call `start()`/`stop()` even when stdin isn't a real TTY (e.g.
-    piped input, some CI environments) — it just no-ops in that case.
-    """
-
-    def __init__(self, loop, event) -> None:
-        self._loop = loop
-        self._event = event
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
-
-    def start(self) -> None:
-        if not sys.stdin.isatty():
-            return
-        if not _HAS_TERMIOS and not _HAS_MSVCRT:
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._watch, daemon=True)
-        self._thread.start()
-
-    def _signal_esc(self) -> None:
-        self._loop.call_soon_threadsafe(self._event.set)
-
-    def _watch(self) -> None:
-        if _HAS_TERMIOS:
-            self._watch_termios()
-        elif _HAS_MSVCRT:
-            self._watch_msvcrt()
-
-    def _watch_termios(self) -> None:
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-        try:
-            tty.setcbreak(fd)
-            while not self._stop.is_set():
-                ready, _, _ = select.select([sys.stdin], [], [], 0.1)
-                if ready:
-                    ch = sys.stdin.read(1)
-                    if ch == "\x1b":
-                        self._signal_esc()
-                        return
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-
-    def _watch_msvcrt(self) -> None:  # pragma: no cover - Windows only
-        while not self._stop.is_set():
-            if msvcrt.kbhit():
-                ch = msvcrt.getch()
-                if ch == b"\x1b":
-                    self._signal_esc()
-                    return
-            else:
-                self._stop.wait(0.1)
-
-    def stop(self) -> None:
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=0.3)
-            self._thread = None
-
-
-def confirm(question: str, details: dict | None = None) -> str:
-    """Permission prompt styled like an opencode permission dialog.
-
-    When `details` carries a diff (kind == "diff"), the colorized unified
-    diff is printed first so the user approves the actual change, not a
-    blind "write N chars" summary. Returns "allow", "always", or "deny".
-    """
-    console.print()
-    if details and details.get("kind") == "diff":
-        lines = details.get("lines", [])
-        total = details.get("total_lines", len(lines))
-        shown = "\n".join(lines)
-        if total > len(lines):
-            shown += f"\n… {total - len(lines)} more lines"
-        title = f"diff · {details.get('path', '')} · {details.get('stat', '')}"
-        if details.get("new_file"):
-            title += " · new file"
-        console.print(
-            Panel(
-                Syntax(shown or "(no changes)", "diff", theme="ansi_dark"),
-                title=title, title_align="left",
-                border_style=BORDER_SUBTLE, padding=(0, 1),
-            )
-        )
-    body = Text()
-    body.append("\u25b3 ", style=f"bold {WARNING}")
-    body.append(f"Allow agent to {question}?", style=TEXT)
-    console.print(Panel(body, title="permission", title_align="left",
-                        border_style=BORDER_SUBTLE, padding=(0, 1)))
-    opts = Text()
-    opts.append("1", style=f"bold {SUCCESS}"); opts.append(") Allow    ")
-    opts.append("2", style=f"bold {WARNING}"); opts.append(") Always Allow    ")
-    opts.append("3", style=f"bold {ERROR}");   opts.append(") Don't Allow")
-    console.print(opts)
-    answer = console.input("[1/2/3] ").strip()
-    if answer == "1":
-        return "allow"
-    if answer == "2":
-        return "always"
-    return "deny"
-
-
-def user_prompt(mode: str) -> str:
-    console.print()
-    console.print(Rule(style=BORDER_SUBTLE))
-    prompt = Text()
-    prompt.append("> ", style=f"bold {TEXT}")
-    prompt.append(mode, style=TEXT_MUTED)
-    prompt.append("  ")
-    return console.input(prompt).strip()
