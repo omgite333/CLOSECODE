@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "closecode-ai"
-version = "0.1.0"
+version = "0.2.0"
 description = "CloseCode — an agentic terminal coding assistant (LangGraph + OpenRouter + MCP)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -42,10 +42,12 @@ py-modules = [
     "main",
     "mcp_tools",
     "modes",
+    "render",
     "search",
     "session",
     "todos",
     "token_tracker",
     "tools",
+    "tui",
     "ui",
 ]
