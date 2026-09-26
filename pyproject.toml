@@ -35,6 +35,7 @@ closecode = "main:cli_entry"
 [tool.setuptools]
 py-modules = [
     "agent",
+    "config",
     "debug_response",
     "guardrails",
     "harness",

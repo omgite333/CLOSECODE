@@ -23,6 +23,7 @@ from langgraph.errors import GraphRecursionError  # noqa: E402
 import session  # noqa: E402
 import ui  # noqa: E402
 from agent import SYSTEM_PROMPT, build_graph  # noqa: E402
+from config import KEY_API, KEY_MODEL, config_path, load_config, save_config_value  # noqa: E402
 from guardrails import check_user_input, redact_message  # noqa: E402
 from harness import Harness  # noqa: E402
 from llm import DEFAULT_MODEL, KNOWN_MODELS, fetch_openrouter_models, get_llm, resolve_model_arg  # noqa: E402
@@ -235,40 +236,32 @@ async def run_turn(graph, messages: list, token_tracker: TokenTracker,
     return final_messages
 
 
-def save_key_to_dotenv(key: str) -> None:
-    """Persist an API key into .env (creating the file if needed), replacing
-    any existing OPENROUTER_API_KEY line. .env is gitignored, so the key
-    never lands in version control."""
-    path = ".env"
-    lines: list[str] = []
-    if os.path.exists(path):
-        with open(path) as f:
-            lines = f.read().splitlines()
-    updated = False
-    for i, line in enumerate(lines):
-        if line.strip().startswith("OPENROUTER_API_KEY="):
-            lines[i] = f"OPENROUTER_API_KEY={key}"
-            updated = True
-    if not updated:
-        if lines and lines[-1].strip():
-            lines.append("")
-        lines.append(f"OPENROUTER_API_KEY={key}")
-    with open(path, "w") as f:
-        f.write("\n".join(lines) + "\n")
+def save_api_key(key: str) -> str:
+    """Persist an API key to the per-user config (~/.closecode/config.json)
+    so it's asked only once per machine, no matter which directory
+    closecode is launched from."""
+    return str(save_config_value(KEY_API, key))
 
 
 def ensure_api_key() -> str:
-    """Make sure an OpenRouter API key is available. If OPENROUTER_API_KEY
-    isn't set (env or .env), prompt the user to paste one — hidden input —
-    and offer to save it to .env for next time. Exits if no key is given,
-    since the agent can't call a model without one.
+    """Make sure an OpenRouter API key is available. Lookup order:
+    OPENROUTER_API_KEY env (which also covers the project's .env via
+    load_dotenv) -> ~/.closecode/config.json -> prompt the user (hidden
+    input) and offer to save it to the user config for next time.
+    Exits if no key is given, since the agent can't call a model without one.
 
     Runs before any frontend takes over the terminal, so the classic
     console prompt is fine even in TUI mode."""
     key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if not key:
+        key = str(load_config().get(KEY_API, "") or "").strip()
     if key:
+        os.environ["OPENROUTER_API_KEY"] = key
         return key
-    ui.print_notice("No OPENROUTER_API_KEY found in env or .env.", style="yellow")
+    ui.print_notice(
+        "No OPENROUTER_API_KEY found (env, .env, or ~/.closecode/config.json).",
+        style="yellow",
+    )
     key = ui.prompt_api_key()
     if not key:
         ui.print_notice(
@@ -279,8 +272,8 @@ def ensure_api_key() -> str:
         raise SystemExit(1)
     os.environ["OPENROUTER_API_KEY"] = key
     if ui.confirm_save_key():
-        save_key_to_dotenv(key)
-        ui.print_notice("Saved to .env", style="green")
+        path = save_api_key(key)
+        ui.print_notice(f"Saved to {path} — won't ask again on this machine.", style="green")
     return key
 
 
@@ -363,7 +356,15 @@ async def build_context(render: Renderer, esc_factory, key_prompter,
     ctx.confirm_save_key = confirm_save_key
 
     ctx.model_override = None
-    ctx.model_name = os.environ.get("HF_MODEL_ID") or os.environ.get("OLLAMA_MODEL", DEFAULT_MODEL)
+    # New sessions start on the saved default model (set via /model),
+    # unless explicitly overridden by env. Resuming a session below
+    # restores that session's own model instead.
+    ctx.model_name = (
+        os.environ.get("HF_MODEL_ID")
+        or os.environ.get("OLLAMA_MODEL")
+        or str(load_config().get(KEY_MODEL, "") or "").strip()
+        or DEFAULT_MODEL
+    )
 
     # Start fresh, or resume the most-recently-used non-empty session from
     # the SQLite store (metadata restores its mode/model too).
@@ -445,7 +446,8 @@ async def handle_command(ctx: AgentCtx, cmd: str, arg: str) -> None:
                 ctx.model_name = new_model
                 ctx.graph = build_graph(filter_tools_for_mode(ctx.all_tools, ctx.mode), ctx.model_override)
                 r.set_context(ctx.mode, ctx.model_name)
-                r.notice(f"Switched model to {new_model}", style="cyan")
+                save_config_value(KEY_MODEL, new_model)
+                r.notice(f"Switched model to {new_model} — saved as default for new sessions.", style="cyan")
     elif cmd == "models":
         await _show_models(ctx, r, arg)
     elif cmd == "key":
@@ -455,8 +457,8 @@ async def handle_command(ctx: AgentCtx, cmd: str, arg: str) -> None:
         else:
             os.environ["OPENROUTER_API_KEY"] = key
             if await ctx.confirm_save_key():
-                save_key_to_dotenv(key)
-                r.notice("Saved to .env", style="green")
+                path = save_api_key(key)
+                r.notice(f"Saved to {path} — won't ask again on this machine.", style="green")
             ctx.graph = build_graph(filter_tools_for_mode(ctx.all_tools, ctx.mode), ctx.model_override)
             r.notice("API key updated.", style="green")
     elif cmd == "sessions":
