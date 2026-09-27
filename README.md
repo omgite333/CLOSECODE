@@ -42,6 +42,11 @@ that scaffolding, built openly, with open models via OpenRouter instead of a clo
   model, so it can explore and propose a plan with no possibility of a side effect
 - **Guardrails** — four layers: input-scope filtering, destructive-command blocking
   (`rm -rf /`, fork bombs, `curl | sh`), malicious-write scanning, and output redaction
+- **Diff-before-approve** — in the classic frontend, write and edit prompts show a colorized
+  unified diff with a `+12 −4` stat, so you approve the actual change instead of a filename
+  (the TUI's permission modal still shows only the summary — see [Known gaps](#known-gaps))
+- **Undo** — every `write_file`/`edit_file` is snapshotted before it lands; `/undo` reverts
+  the last change (or the last *n*), and the checkpoints survive a restart
 - **Persistent sessions** — SQLite-backed conversation history; `/resume`, `/sessions`,
   `--continue`
 - **Todo tracking** — the agent maintains a visible task list for multi-step work
@@ -83,11 +88,11 @@ pip install -e ".[dev]"
 pytest
 ```
 
-429 tests covering guardrails, sandbox path resolution, undo/checkpoints, background
-processes, todo-store invariants, plan-mode tool filtering, session persistence, config
-permissions, and the search tools. The suite is fully isolated: `config.py` and
-`session.py` are redirected to temp dirs, no test touches the network, and nothing is
-written to your real `~/.closecode`.
+444 tests covering guardrails, sandbox path resolution, undo/checkpoints, diff rendering in
+permission prompts, background processes, todo-store invariants, plan-mode tool filtering,
+session persistence, config permissions, and the search tools. The suite is fully isolated:
+`config.py` and `session.py` are redirected to temp dirs, no test touches the network, and
+nothing is written to your real `~/.closecode`.
 
 Some tests are marked `xfail` for **known bugs** rather than fixed behaviour — they
 document a gap and will flip to passing when it's fixed. Run `pytest -rx` to list them.
@@ -171,6 +176,7 @@ never bound to the model in the first place.
 | `bash` | Run a shell command in the sandbox (capped timeout, guardrail-checked) |
 | `run_tests` | Run the project's test command and report pass/fail |
 | `todo_write` / `todo_read` | Maintain a visible multi-step task list |
+| `undo_last_change` | Revert the last *n* of the agent's own file writes (same engine as `/undo`) |
 | `tavily_search` | Web search for current docs/APIs (requires `TAVILY_API_KEY`) |
 | git tools (`status`, `diff`, `log`, `commit`, branches) | Via `mcp-server-git`, enabled with `AGENT_ENABLE_GIT=true` |
 
@@ -185,7 +191,9 @@ never bound to the model in the first place.
 /resume <id>          switch to a saved session
 /delete <id>          delete a saved session
 /usage                token usage for this session
+/undo [n]             revert the last n file changes (default 1)
 /clear                start a new session
+/compact              summarize history into a fresh context
 /help                 show all commands
 ```
 
@@ -218,10 +226,20 @@ This is layered defense, not a single mechanism:
 4. **Output redaction** — flagged content is scrubbed from conversation history
 5. **Sandboxed paths** — every file operation resolves through the harness, which refuses
    to write outside the configured working directory regardless of how the path is phrased
+6. **Approve the diff, not the filename** — in the classic frontend, write and edit prompts
+   render a colorized unified diff (3 lines of context, capped at 80 lines with a
+   "… N more lines" note and a `+12 −4` stat), so an unexpected rewrite is visible before
+   you allow it
+7. **Undo** — pre-write snapshots let you revert the agent's file changes after the fact,
+   not just refuse them up front
 
 These are conservative heuristics layered on top of the sandbox and per-action permission
-prompts — not a formal guarantee. Shell commands currently run on the host inside a
-path-restricted directory, not inside a container; see [Roadmap](#roadmap).
+prompts — not a formal guarantee. Three limits are worth stating plainly: shell commands
+currently run on the host inside a path-restricted directory, not inside a container (see
+[Roadmap](#roadmap)); undo only covers `write_file` / `edit_file`, not side effects the agent
+causes through `bash`; and the TUI's permission prompt does not yet render the diff, so
+diff-before-approve only applies with `--no-tui`.
+.
 
 ## A note on model choice
 
@@ -242,7 +260,9 @@ models is the first thing to try before changing anything else.
 ## Roadmap
 
 - [x] Test suite (`pytest tests/`) — guardrails, sandbox path resolution, todo-store invariants
+- [x] Undo checkpoints (`/undo`) and diff-before-approve permission prompts
 - [ ] CI (run the suite on push)
+- [ ] Render the write/edit diff in the TUI permission modal (payload already built)
 - [ ] Docker-based sandbox for shell execution, not just path restriction
 - [ ] Client/server split — `build_graph()` behind FastAPI/WebSocket, thin streaming client
 - [ ] PyPI release + prebuilt binaries (PyInstaller) for no-Python-required installs
